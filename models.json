@@ -1,0 +1,4 @@
+{
+  "llm_endpoint_url": "https://opencode.ai/zen/go/v1/chat/completions",
+  "model_name": "kimi-k2.5"
+}
