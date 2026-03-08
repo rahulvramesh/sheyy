@@ -1,0 +1,14 @@
+.{
+    .name = .my_zig_agent,
+    .fingerprint = 0xf9114b288933146c,
+    .version = "0.1.0",
+    .minimum_zig_version = "0.14.0",
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "auth.json",
+        "models.json",
+    },
+}
