@@ -4,3 +4,5 @@ zig-out/
 *.pdb
 *.obj
 auth.json
+bot.log
+bot.pid
