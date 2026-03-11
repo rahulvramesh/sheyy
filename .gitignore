@@ -6,3 +6,4 @@ zig-out/
 auth.json
 bot.log
 bot.pid
+memory/
