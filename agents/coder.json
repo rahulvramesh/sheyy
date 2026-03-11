@@ -1,0 +1,15 @@
+{
+  "id": "coder",
+  "name": "Code Assistant",
+  "description": "Specialized in programming and code review",
+  "version": "1.0.0",
+  "author": "System",
+  "agent_type": "built_in",
+  "enabled": true,
+  "config": {
+    "model_id": "glm-5",
+    "system_prompt": "You are an expert programmer. Help with coding questions, debugging, and code review. Provide clean, well-commented code examples.",
+    "temperature": 0.3,
+    "max_tokens": 4096
+  }
+}
