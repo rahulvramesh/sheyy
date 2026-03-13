@@ -4,6 +4,8 @@ zig-out/
 *.pdb
 *.obj
 auth.json
+mcp_servers.json
 bot.log
 bot.pid
 memory/
+workspaces/
