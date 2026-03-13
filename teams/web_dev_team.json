@@ -1,0 +1,23 @@
+{
+  "id": "web_dev",
+  "name": "Web Development Team",
+  "description": "Full-stack web development: PM plans, engineer builds, reviewer checks",
+  "roles": [
+    {
+      "agent_id": "project_manager",
+      "role": "lead",
+      "responsibilities": "Gather requirements, break down tasks, coordinate work"
+    },
+    {
+      "agent_id": "software_engineer",
+      "role": "member",
+      "responsibilities": "Implement features, write tests, set up project"
+    },
+    {
+      "agent_id": "code_reviewer",
+      "role": "reviewer",
+      "responsibilities": "Review code quality, check for bugs and security issues"
+    }
+  ],
+  "workflow": "PM gathers requirements and creates plan -> Engineer implements each subtask -> Reviewer checks the final result"
+}

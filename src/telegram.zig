@@ -159,20 +159,55 @@ pub const TelegramClient = struct {
         var remaining = text;
         while (remaining.len > 0) {
             if (remaining.len <= MAX_MESSAGE_LEN) {
-                try self.sendRaw(chat_id, remaining);
+                _ = try self.sendRaw(chat_id, remaining);
                 break;
             }
             // Find a good split point (last newline before limit)
             var split: usize = MAX_MESSAGE_LEN;
             while (split > 0 and remaining[split - 1] != '\n') split -= 1;
             if (split == 0) split = MAX_MESSAGE_LEN; // no newline, hard split
-            try self.sendRaw(chat_id, remaining[0..split]);
+            _ = try self.sendRaw(chat_id, remaining[0..split]);
             remaining = remaining[split..];
         }
     }
 
-    /// Send a single message chunk via Telegram API
-    fn sendRaw(self: *Self, chat_id: i64, text: []const u8) TelegramError!void {
+    /// Send a message and return the message_id (for later editing)
+    pub fn sendMessageReturningId(self: *Self, chat_id: i64, text: []const u8) TelegramError!i64 {
+        return self.sendRaw(chat_id, text);
+    }
+
+    /// Edit an existing message
+    pub fn editMessage(self: *Self, chat_id: i64, message_id: i64, text: []const u8) TelegramError!void {
+        const url = try std.fmt.allocPrint(self.allocator, "{s}/editMessageText", .{self.base_url});
+        defer self.allocator.free(url);
+
+        const Payload = struct { chat_id: i64, message_id: i64, text: []const u8 };
+        const payload = Payload{ .chat_id = chat_id, .message_id = message_id, .text = text };
+
+        const json_payload = std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(payload, .{})}) catch {
+            return TelegramError.OutOfMemory;
+        };
+        defer self.allocator.free(json_payload);
+
+        var response_writer: std.Io.Writer.Allocating = .init(self.allocator);
+        defer response_writer.deinit();
+
+        _ = self.http_client.fetch(.{
+            .location = .{ .url = url },
+            .method = .POST,
+            .headers = .{
+                .content_type = .{ .override = "application/json" },
+            },
+            .payload = json_payload,
+            .response_writer = &response_writer.writer,
+        }) catch |err| {
+            std.log.err("Failed to edit message: {s}", .{@errorName(err)});
+            return TelegramError.SendFailed;
+        };
+    }
+
+    /// Send a single message chunk via Telegram API, returns message_id
+    fn sendRaw(self: *Self, chat_id: i64, text: []const u8) TelegramError!i64 {
         const url = try std.fmt.allocPrint(self.allocator, "{s}/sendMessage", .{self.base_url});
         defer self.allocator.free(url);
 
@@ -204,6 +239,18 @@ pub const TelegramClient = struct {
             std.log.err("Send message status: {d}", .{@intFromEnum(fetch_result.status)});
             return TelegramError.SendFailed;
         }
+
+        // Parse response to extract message_id
+        const resp_body = response_writer.written();
+        const MsgResult = struct { message_id: i64 };
+        const SendResp = struct { ok: bool, result: ?MsgResult = null };
+        const parsed = std.json.parseFromSlice(SendResp, self.allocator, resp_body, .{
+            .ignore_unknown_fields = true,
+        }) catch return 0;
+        defer parsed.deinit();
+
+        if (parsed.value.result) |r| return r.message_id;
+        return 0;
     }
 
     /// Send typing indicator
@@ -244,13 +291,16 @@ pub const TelegramClient = struct {
             .{ .command = "help", .description = "Show commands" },
             .{ .command = "agents", .description = "List available agents" },
             .{ .command = "agent", .description = "Switch agent (e.g. /agent coder)" },
+            .{ .command = "teams", .description = "List available teams" },
+            .{ .command = "team", .description = "Activate a team (e.g. /team web_dev)" },
+            .{ .command = "task", .description = "Show current task status" },
             .{ .command = "clear", .description = "Clear conversation history" },
             .{ .command = "history", .description = "Show recent conversation" },
-            .{ .command = "reload", .description = "Reload agents from disk" },
+            .{ .command = "reload", .description = "Reload agents/teams from disk" },
         };
 
-        const Payload = struct { commands: []const BotCommand };
-        const payload = Payload{ .commands = &commands };
+        const CmdPayload = struct { commands: []const BotCommand };
+        const payload = CmdPayload{ .commands = &commands };
 
         const json_payload = std.fmt.allocPrint(self.allocator, "{f}", .{std.json.fmt(payload, .{})}) catch {
             return TelegramError.OutOfMemory;

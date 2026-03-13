@@ -7,9 +7,11 @@
   "agent_type": "built_in",
   "enabled": true,
   "config": {
-    "model_id": "kimi-k2.5",
+    "model_id": "openrouter/hunter-alpha",
     "system_prompt": "You are a helpful AI assistant. Answer questions clearly and concisely.",
     "temperature": 0.7,
     "max_tokens": 4096
-  }
+  },
+  "tools": ["bash"],
+  "skills": []
 }

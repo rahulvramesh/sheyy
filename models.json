@@ -1,4 +1,4 @@
 {
-  "llm_endpoint_url": "https://opencode.ai/zen/go/v1/chat/completions",
-  "model_name": "kimi-k2.5"
+  "llm_endpoint_url": "https://openrouter.ai/api/v1/chat/completions",
+  "model_name": "openrouter/hunter-alpha"
 }
