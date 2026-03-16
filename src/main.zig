@@ -10,11 +10,13 @@ const team_mod = @import("team.zig");
 const orchestrator_mod = @import("orchestrator.zig");
 const mcp = @import("mcp.zig");
 const memory_cortex = @import("memory_cortex.zig");
+const router = @import("router.zig");
 
 // ── Per-Chat State ────────────────────────────────────────────────
 
 const ChatMode = enum {
-    direct_agent, // chatting with a single agent
+    super_agent, // autonomous routing (default)
+    direct_agent, // chatting with a single agent (manual override)
     team_task, // orchestrator managing a team task
 };
 
@@ -43,6 +45,7 @@ const AppState = struct {
     chat_states: std.AutoHashMap(i64, ChatState),
     conversations: std.AutoHashMap(i64, conversation.Conversation),
     cortex: *memory_cortex.MemoryCortex,
+    super_agent: *router.SuperAgent,
     work_dir: []const u8, // base working directory
     persist_dir: []const u8, // memory persistence dir
     max_history: usize,
@@ -61,7 +64,7 @@ const AppState = struct {
         if (result.found_existing) {
             if (result.value_ptr.active_agent_id) |old| self.allocator.free(old);
         } else {
-            result.value_ptr.* = .{ .mode = .direct_agent, .active_agent_id = null, .active_team_id = null };
+            result.value_ptr.* = .{ .mode = .super_agent, .active_agent_id = null, .active_team_id = null };
         }
         result.value_ptr.active_agent_id = try self.allocator.dupe(u8, agent_id);
         result.value_ptr.mode = .direct_agent;
@@ -82,7 +85,7 @@ const AppState = struct {
     fn getChatState(self: *AppState, chat_id: i64) !*ChatState {
         const result = try self.chat_states.getOrPut(chat_id);
         if (!result.found_existing) {
-            result.value_ptr.* = .{ .mode = .direct_agent, .active_agent_id = null, .active_team_id = null };
+            result.value_ptr.* = .{ .mode = .super_agent, .active_agent_id = null, .active_team_id = null };
         }
         return result.value_ptr;
     }
@@ -92,23 +95,59 @@ const AppState = struct {
 
 fn processMessage(state: *AppState, chat_id: i64, text: []const u8) void {
     const cs = state.chat_states.get(chat_id);
+    const mode: ChatMode = if (cs) |s| s.mode else .super_agent;
 
-    // Check if there's an active orchestrator session
-    if (cs != null and cs.?.mode == .team_task) {
-        if (state.orchestrator.getSession(chat_id)) |session| {
-            state.orchestrator.handleMessage(session, text) catch |err| {
-                std.log.err("Orchestrator error: {s}", .{@errorName(err)});
-                state.tg.sendMessage(chat_id, "Error processing task.") catch {};
-            };
-            return;
-        }
+    switch (mode) {
+        .team_task => {
+            // Check if orchestrator session is still active
+            if (state.orchestrator.getSession(chat_id)) |session| {
+                if (session.state == .done or session.state == .failed) {
+                    // Task finished, clean up and fall through to super agent
+                    state.orchestrator.cancelTask(chat_id);
+                    const cs_ptr = state.getChatState(chat_id) catch return;
+                    cs_ptr.mode = .super_agent;
+                    // Fall through to super_agent below
+                } else {
+                    state.orchestrator.handleMessage(session, text) catch |err| {
+                        std.log.err("Orchestrator error: {s}", .{@errorName(err)});
+                        state.tg.sendMessage(chat_id, "Error processing task.") catch {};
+                    };
+                    return;
+                }
+            } else {
+                // No session but mode is team_task - reset
+                const cs_ptr = state.getChatState(chat_id) catch return;
+                cs_ptr.mode = .super_agent;
+            }
+            // Fall through to super agent
+            processViaSuperAgent(state, chat_id, text);
+        },
+        .super_agent => {
+            processViaSuperAgent(state, chat_id, text);
+        },
+        .direct_agent => {
+            processViaDirectAgent(state, chat_id, text);
+        },
     }
+}
 
-    // Direct agent mode
+fn processViaSuperAgent(state: *AppState, chat_id: i64, text: []const u8) void {
+    const result = state.super_agent.handleMessage(chat_id, text);
+    switch (result) {
+        .stay => {},
+        .team_task => {
+            // Super agent decided to start a team task
+            const cs = state.getChatState(chat_id) catch return;
+            cs.mode = .team_task;
+        },
+    }
+}
+
+fn processViaDirectAgent(state: *AppState, chat_id: i64, text: []const u8) void {
     state.tg.sendTyping(chat_id) catch {};
 
     const agent_def = state.getActiveAgent(chat_id) orelse {
-        state.tg.sendMessage(chat_id, "No active agent. Use /agents to list agents.") catch {};
+        state.tg.sendMessage(chat_id, "No active agent. Use /agents or /auto.") catch {};
         return;
     };
 
@@ -120,9 +159,7 @@ fn processMessage(state: *AppState, chat_id: i64, text: []const u8) void {
     conv.addMessage(state.allocator, "user", text) catch return;
     conv.trim(state.allocator, state.max_history);
 
-    // Check if agent has tools -> use AgentRuntime, else simple LLM
     if (agent_def.tool_names.len > 0) {
-        // Agentic mode with tool-use loop
         const progress_id = state.tg.sendMessageReturningId(chat_id, "Thinking...") catch 0;
         const progress = if (progress_id != 0) progress_id else null;
 
@@ -131,7 +168,7 @@ fn processMessage(state: *AppState, chat_id: i64, text: []const u8) void {
             conv,
             chat_id,
             progress,
-            null, // no specific working dir for direct chat
+            null,
         ) catch |err| {
             std.log.err("Agent runtime error: {s}", .{@errorName(err)});
             state.tg.sendMessage(chat_id, "Sorry, something went wrong. Please try again.") catch {};
@@ -142,7 +179,6 @@ fn processMessage(state: *AppState, chat_id: i64, text: []const u8) void {
         conv.addMessage(state.allocator, "assistant", response) catch {};
         conversation.saveConversation(state.allocator, state.persist_dir, chat_id, conv);
 
-        // Edit the progress message with the response, or send new if too long
         if (progress) |pid| {
             if (response.len <= 4096) {
                 state.tg.editMessage(chat_id, pid, response) catch {
@@ -156,15 +192,12 @@ fn processMessage(state: *AppState, chat_id: i64, text: []const u8) void {
             state.tg.sendMessage(chat_id, response) catch {};
         }
     } else {
-        // Simple LLM mode (no tools) - backward compatible
-        const msg_count = conv.messages.items.len + 1;
         const items = conv.messages.items;
         const start = if (items.len > state.max_context) items.len - state.max_context else 0;
         const context_msgs = items[start..];
 
         const final_messages = state.allocator.alloc(llm.ChatMessage, 1 + context_msgs.len) catch return;
         defer state.allocator.free(final_messages);
-        _ = msg_count;
 
         final_messages[0] = .{ .role = "system", .content = agent_def.system_prompt };
         for (context_msgs, 1..) |msg, i| {
@@ -216,15 +249,18 @@ fn handleCommand(state: *AppState, chat_id: i64, text: []const u8) void {
 
     if (std.mem.eql(u8, cmd, "start") or std.mem.eql(u8, cmd, "help")) {
         state.tg.sendMessage(chat_id,
-            \\AI Agent Bot
+            \\AI Agent Bot (Auto-routing enabled)
             \\
-            \\Agent Commands:
+            \\Just send a message - I'll automatically choose the right agent or team!
+            \\
+            \\Manual Override:
+            \\/agent <id> - Switch to a specific agent
+            \\/auto - Re-enable auto-routing
             \\/agents - List available agents
-            \\/agent <id> - Switch agent
             \\
             \\Team Commands:
             \\/teams - List available teams
-            \\/team <id> <task> - Start a team task
+            \\/team <id> <task> - Start a team task manually
             \\/task - Show current task status
             \\/cancel - Cancel current task
             \\
@@ -381,10 +417,19 @@ fn handleCommand(state: *AppState, chat_id: i64, text: []const u8) void {
         return;
     }
 
+    if (std.mem.eql(u8, cmd, "auto")) {
+        const cs = state.getChatState(chat_id) catch return;
+        cs.mode = .super_agent;
+        if (cs.active_agent_id) |old| state.allocator.free(old);
+        cs.active_agent_id = null;
+        state.tg.sendMessage(chat_id, "Auto-routing enabled. I'll decide the best agent for each task.") catch {};
+        return;
+    }
+
     if (std.mem.eql(u8, cmd, "cancel")) {
         state.orchestrator.cancelTask(chat_id);
         const cs = state.getChatState(chat_id) catch return;
-        cs.mode = .direct_agent;
+        cs.mode = .super_agent;
         return;
     }
 
@@ -718,6 +763,24 @@ pub fn main() !void {
     );
     defer orch.deinit();
 
+    // Shared conversations map (used by both direct mode and super agent)
+    var conversations = std.AutoHashMap(i64, conversation.Conversation).init(allocator);
+
+    // Super Agent (autonomous router)
+    var super_agent = router.SuperAgent.init(
+        allocator,
+        &llm_client,
+        &agents,
+        &teams,
+        &runtime,
+        &orch,
+        &tg_client,
+        models_parsed.value.model_name,
+        persist_dir,
+        &conversations,
+    );
+    defer super_agent.deinit();
+
     // App state
     var state = AppState{
         .allocator = allocator,
@@ -729,8 +792,9 @@ pub fn main() !void {
         .runtime = &runtime,
         .orchestrator = &orch,
         .chat_states = std.AutoHashMap(i64, ChatState).init(allocator),
-        .conversations = std.AutoHashMap(i64, conversation.Conversation).init(allocator),
+        .conversations = conversations,
         .cortex = &cortex,
+        .super_agent = &super_agent,
         .work_dir = work_dir,
         .persist_dir = persist_dir,
         .max_history = 50,
@@ -746,8 +810,7 @@ pub fn main() !void {
         state.chat_states.deinit();
     }
 
-    // Set default active agent (will be per-chat on first message)
-    std.log.info("Bot ready with {d} agents, {d} teams.", .{ agents.count(), teams.count() });
+    std.log.info("Bot ready with {d} agents, {d} teams. Auto-routing enabled.", .{ agents.count(), teams.count() });
 
     // Main polling loop
     while (true) {
@@ -771,17 +834,9 @@ pub fn main() !void {
         for (messages) |msg| {
             std.log.info("Message from {d}: {s}", .{ msg.user_id, msg.text });
 
-            // Auto-assign default agent if chat has no state
+            // Ensure chat state exists (defaults to super_agent mode)
             if (!state.chat_states.contains(msg.chat_id)) {
-                // Pick "assistant" agent or first available
-                if (agents.get("assistant")) |_| {
-                    state.setActiveAgent(msg.chat_id, "assistant") catch {};
-                } else {
-                    var it = agents.iterator();
-                    if (it.next()) |entry| {
-                        state.setActiveAgent(msg.chat_id, entry.key_ptr.*) catch {};
-                    }
-                }
+                _ = state.getChatState(msg.chat_id) catch {};
             }
 
             if (isCommand(msg.text)) {

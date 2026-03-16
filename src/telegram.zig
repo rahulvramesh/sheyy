@@ -289,13 +289,16 @@ pub const TelegramClient = struct {
         const commands = [_]BotCommand{
             .{ .command = "start", .description = "Start the bot" },
             .{ .command = "help", .description = "Show commands" },
+            .{ .command = "auto", .description = "Re-enable auto-routing" },
             .{ .command = "agents", .description = "List available agents" },
             .{ .command = "agent", .description = "Switch agent (e.g. /agent coder)" },
             .{ .command = "teams", .description = "List available teams" },
             .{ .command = "team", .description = "Activate a team (e.g. /team web_dev)" },
             .{ .command = "task", .description = "Show current task status" },
+            .{ .command = "cancel", .description = "Cancel current task" },
             .{ .command = "clear", .description = "Clear conversation history" },
             .{ .command = "history", .description = "Show recent conversation" },
+            .{ .command = "memory", .description = "Memory commands" },
             .{ .command = "reload", .description = "Reload agents/teams from disk" },
         };
 
