@@ -41,6 +41,12 @@ pub const SuperAgent = struct {
     max_routing_history: usize,
     max_agent_history: usize,
 
+    // Workspace paths for self-organization
+    workspace_dir: []const u8,
+    agents_dir: []const u8,
+    teams_dir: []const u8,
+    skills_dir: []const u8,
+
     pub fn init(
         allocator: std.mem.Allocator,
         llm_client: *llm.LlmClient,
@@ -52,6 +58,10 @@ pub const SuperAgent = struct {
         model_id: []const u8,
         persist_dir: []const u8,
         agent_convs: *std.AutoHashMap(i64, conversation.Conversation),
+        workspace_dir: []const u8,
+        agents_dir: []const u8,
+        teams_dir: []const u8,
+        skills_dir: []const u8,
     ) SuperAgent {
         return .{
             .allocator = allocator,
@@ -68,6 +78,10 @@ pub const SuperAgent = struct {
             .persist_dir = persist_dir,
             .max_routing_history = 20,
             .max_agent_history = 50,
+            .workspace_dir = workspace_dir,
+            .agents_dir = agents_dir,
+            .teams_dir = teams_dir,
+            .skills_dir = skills_dir,
         };
     }
 
@@ -314,21 +328,40 @@ pub const SuperAgent = struct {
         const w = buf.writer(self.allocator);
 
         try w.print(
-            \\You are an autonomous AI assistant. Analyze each user message and decide the best way to handle it.
+            \\You are an autonomous, self-organizing AI orchestrator. You analyze each user message and decide the best way to handle it.
             \\
             \\You MUST call exactly ONE tool for every message:
-            \\- respond_directly: For greetings, simple questions, general knowledge, clarifications, or anything you can answer without tools.
-            \\- delegate_to_agent: For tasks that need specialized tools or expertise (coding, file operations, web search, code review, etc.)
-            \\- start_team_task: ONLY for complex multi-step projects that genuinely need planning, multiple specialists, and review.
+            \\- respond_directly: For greetings, simple questions, general knowledge, or clarifications.
+            \\- delegate_to_agent: For tasks that need specialized tools or expertise (coding, debugging, research, etc.)
+            \\- start_team_task: For complex multi-step projects that need planning, multiple specialists, and review.
+            \\- create_agent: When no existing agent fits the task. Create a new specialist on the fly.
+            \\- create_team: When no existing team fits a complex project. Design a team with roles and workflow.
             \\
-            \\Guidelines:
+            \\SELF-ORGANIZATION: You can dynamically create agents and teams to handle ANY domain.
+            \\- If the user asks to "build a mobile app" but you only have web agents, CREATE a mobile specialist agent first, then delegate.
+            \\- If the user wants a full SDLC pipeline, CREATE a team with PM, architect, developers, QA, and DevOps roles.
+            \\- Created agents and teams persist to disk and are immediately available.
+            \\- When creating agents, give them the "bash" tool so they can execute commands. Add relevant skills if they exist.
+            \\- For teams, reference agent IDs that exist (or that you just created).
+            \\
+            \\ROUTING GUIDELINES:
             \\- Simple conversations -> respond_directly
-            \\- Single focused tasks (write code, search web, run command) -> delegate_to_agent
-            \\- Large projects (build an app, multi-file changes with review) -> start_team_task
-            \\- When delegating, choose the most appropriate agent based on the task.
-            \\- Pass the user's full request as the task context.
+            \\- Single focused tasks -> delegate_to_agent (pick best existing agent, or create one)
+            \\- Large projects (build an app, full SDLC, multi-phase work) -> create_team if needed, then start_team_task
+            \\- When in doubt about whether an agent exists for a task, create a specialized one.
             \\
         , .{});
+
+        // Workspace context
+        try w.print("\\nWorkspace:\\n", .{});
+        try w.print("- Working directory: {s}\\n", .{self.workspace_dir});
+        try w.print("- Agents directory: {s}\\n", .{self.agents_dir});
+        try w.print("- Teams directory: {s}\\n", .{self.teams_dir});
+        try w.print("- Skills directory: {s}\\n", .{self.skills_dir});
+
+        // List available skills
+        try w.print("\\nAvailable Skills (markdown files agents can use):\\n", .{});
+        try self.appendSkillsList(w);
 
         // List available agents
         try w.print("\\nAvailable Agents:\\n", .{});
@@ -372,7 +405,11 @@ pub const SuperAgent = struct {
 
     fn buildRoutingToolsJson(self: *SuperAgent) ![]u8 {
         const tools_json =
-            \\[{"type":"function","function":{"name":"respond_directly","description":"Respond directly to the user for simple questions, greetings, or general knowledge.","parameters":{"type":"object","properties":{"message":{"type":"string","description":"The complete response message to send"}},"required":["message"]}}},{"type":"function","function":{"name":"delegate_to_agent","description":"Delegate to a specialized agent for tasks needing tools or expertise.","parameters":{"type":"object","properties":{"agent_id":{"type":"string","description":"The agent ID to delegate to"},"task":{"type":"string","description":"Description of what the agent should do"}},"required":["agent_id","task"]}}},{"type":"function","function":{"name":"start_team_task","description":"Start a multi-agent team task for complex projects needing planning and review.","parameters":{"type":"object","properties":{"team_id":{"type":"string","description":"The team ID to activate"},"task":{"type":"string","description":"Full project description"}},"required":["team_id","task"]}}}]
+            \\[{"type":"function","function":{"name":"respond_directly","description":"Respond directly to the user for simple questions, greetings, or general knowledge.","parameters":{"type":"object","properties":{"message":{"type":"string","description":"The complete response message to send"}},"required":["message"]}}},
+            \\{"type":"function","function":{"name":"delegate_to_agent","description":"Delegate to a specialized agent for tasks needing tools or expertise.","parameters":{"type":"object","properties":{"agent_id":{"type":"string","description":"The agent ID to delegate to"},"task":{"type":"string","description":"Description of what the agent should do"}},"required":["agent_id","task"]}}},
+            \\{"type":"function","function":{"name":"start_team_task","description":"Start a multi-agent team task for complex projects needing planning and review.","parameters":{"type":"object","properties":{"team_id":{"type":"string","description":"The team ID to activate"},"task":{"type":"string","description":"Full project description"}},"required":["team_id","task"]}}},
+            \\{"type":"function","function":{"name":"create_agent","description":"Create a new specialist agent on the fly. Use when no existing agent fits the task domain. The agent is saved to disk and immediately available.","parameters":{"type":"object","properties":{"id":{"type":"string","description":"Unique agent ID (snake_case, e.g. mobile_dev)"},"name":{"type":"string","description":"Human-readable name"},"description":{"type":"string","description":"What this agent specializes in"},"system_prompt":{"type":"string","description":"The agent's system prompt defining its behavior and expertise"},"model_id":{"type":"string","description":"LLM model to use (e.g. the same model you are using)"},"tools":{"type":"array","items":{"type":"string"},"description":"Tool names the agent can use (typically [\"bash\"])"},"skills":{"type":"array","items":{"type":"string"},"description":"Skill file names from skills/ directory to inject into the prompt"}},"required":["id","name","description","system_prompt","model_id","tools"]}}},
+            \\{"type":"function","function":{"name":"create_team","description":"Create a new team of agents for complex multi-step projects. Define roles and workflow. The team is saved to disk and immediately available for start_team_task.","parameters":{"type":"object","properties":{"id":{"type":"string","description":"Unique team ID (snake_case)"},"name":{"type":"string","description":"Human-readable team name"},"description":{"type":"string","description":"What this team handles"},"roles":{"type":"array","items":{"type":"object","properties":{"agent_id":{"type":"string"},"role":{"type":"string","enum":["lead","member","reviewer"]},"responsibilities":{"type":"string"}},"required":["agent_id","role","responsibilities"]},"description":"Team roles mapping to agent IDs"},"workflow":{"type":"string","description":"Description of how the team collaborates"}},"required":["id","name","description","roles","workflow"]}}}]
         ;
         return try self.allocator.dupe(u8, tools_json);
     }
@@ -419,8 +456,178 @@ pub const SuperAgent = struct {
             } };
         }
 
+        if (std.mem.eql(u8, call.function_name, "create_agent")) {
+            const result_msg = self.executeCreateAgent(call.arguments_json) catch |err| {
+                return .{ .respond_directly = try std.fmt.allocPrint(self.allocator, "Failed to create agent: {s}", .{@errorName(err)}) };
+            };
+            return .{ .respond_directly = result_msg };
+        }
+
+        if (std.mem.eql(u8, call.function_name, "create_team")) {
+            const result_msg = self.executeCreateTeam(call.arguments_json) catch |err| {
+                return .{ .respond_directly = try std.fmt.allocPrint(self.allocator, "Failed to create team: {s}", .{@errorName(err)}) };
+            };
+            return .{ .respond_directly = result_msg };
+        }
+
         // Unknown tool - treat as direct response
         return .{ .respond_directly = try self.allocator.dupe(u8, "I'm not sure how to help with that.") };
+    }
+
+    // ── Meta-Tool Execution ────────────────────────────────────────
+
+    fn appendSkillsList(self: *SuperAgent, w: anytype) !void {
+        var dir = std.fs.cwd().openDir(self.skills_dir, .{ .iterate = true }) catch {
+            try w.print("  (none)\\n", .{});
+            return;
+        };
+        defer dir.close();
+        var iter = dir.iterate();
+        var found_any = false;
+        while (iter.next() catch null) |entry| {
+            if (std.mem.endsWith(u8, entry.name, ".md")) {
+                try w.print("  - {s}\\n", .{entry.name});
+                found_any = true;
+            }
+        }
+        if (!found_any) try w.print("  (none)\\n", .{});
+    }
+
+    fn executeCreateAgent(self: *SuperAgent, args_json: []const u8) ![]u8 {
+        // Parse the arguments
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, args_json, .{}) catch {
+            return error.JsonParseError;
+        };
+        defer parsed.deinit();
+        const root = parsed.value.object;
+
+        const id = (root.get("id") orelse return error.JsonParseError).string;
+        const name = (root.get("name") orelse return error.JsonParseError).string;
+        const description = (root.get("description") orelse return error.JsonParseError).string;
+        const system_prompt = (root.get("system_prompt") orelse return error.JsonParseError).string;
+        const model_id = (root.get("model_id") orelse return error.JsonParseError).string;
+
+        // Check if agent already exists
+        if (self.agents.contains(id)) {
+            return try std.fmt.allocPrint(self.allocator, "Agent '{s}' already exists. You can delegate to it directly.", .{id});
+        }
+
+        // Build JSON for the agent file
+        var json_buf: std.ArrayList(u8) = .empty;
+        defer json_buf.deinit(self.allocator);
+        const jw = json_buf.writer(self.allocator);
+
+        try jw.print("{{\n  \"id\": {f},\n  \"name\": {f},\n  \"description\": {f},\n", .{
+            std.json.fmt(id, .{}),
+            std.json.fmt(name, .{}),
+            std.json.fmt(description, .{}),
+        });
+        try jw.print("  \"config\": {{\n    \"model_id\": {f},\n    \"system_prompt\": {f},\n    \"temperature\": 0.3\n  }},\n", .{
+            std.json.fmt(model_id, .{}),
+            std.json.fmt(system_prompt, .{}),
+        });
+
+        // Tools array
+        try jw.print("  \"tools\": [", .{});
+        if (root.get("tools")) |tools_val| {
+            for (tools_val.array.items, 0..) |tool, i| {
+                if (i > 0) try jw.print(", ", .{});
+                try jw.print("{f}", .{std.json.fmt(tool.string, .{})});
+            }
+        }
+        try jw.print("],\n", .{});
+
+        // Skills array
+        try jw.print("  \"skills\": [", .{});
+        if (root.get("skills")) |skills_val| {
+            for (skills_val.array.items, 0..) |skill, i| {
+                if (i > 0) try jw.print(", ", .{});
+                try jw.print("{f}", .{std.json.fmt(skill.string, .{})});
+            }
+        }
+        try jw.print("]\n}}\n", .{});
+
+        // Write to file
+        const file_name = try std.fmt.allocPrint(self.allocator, "{s}.json", .{id});
+        defer self.allocator.free(file_name);
+        const file_path = try std.fs.path.join(self.allocator, &.{ self.agents_dir, file_name });
+        defer self.allocator.free(file_path);
+
+        try std.fs.cwd().writeFile(.{ .sub_path = file_path, .data = json_buf.items });
+
+        // Load and register in memory
+        const agent_def = try agent_mod.loadAgent(self.allocator, file_path);
+        try self.agents.put(agent_def.id, agent_def);
+
+        std.log.info("[router] Created new agent: {s} ({s})", .{ name, id });
+        return try std.fmt.allocPrint(self.allocator,
+            "Created agent '{s}' ({s}). It's now available for delegation. Tools: {d}, Skills: {d}.",
+            .{ name, id, agent_def.tool_names.len, agent_def.skill_names.len },
+        );
+    }
+
+    fn executeCreateTeam(self: *SuperAgent, args_json: []const u8) ![]u8 {
+        const parsed = std.json.parseFromSlice(std.json.Value, self.allocator, args_json, .{}) catch {
+            return error.JsonParseError;
+        };
+        defer parsed.deinit();
+        const root = parsed.value.object;
+
+        const id = (root.get("id") orelse return error.JsonParseError).string;
+        const name_val = (root.get("name") orelse return error.JsonParseError).string;
+        const description = (root.get("description") orelse return error.JsonParseError).string;
+        const workflow = (root.get("workflow") orelse return error.JsonParseError).string;
+
+        // Check if team already exists
+        if (self.teams.contains(id)) {
+            return try std.fmt.allocPrint(self.allocator, "Team '{s}' already exists. You can start a task with it directly.", .{id});
+        }
+
+        // Build JSON
+        var json_buf: std.ArrayList(u8) = .empty;
+        defer json_buf.deinit(self.allocator);
+        const jw = json_buf.writer(self.allocator);
+
+        try jw.print("{{\n  \"id\": {f},\n  \"name\": {f},\n  \"description\": {f},\n", .{
+            std.json.fmt(id, .{}),
+            std.json.fmt(name_val, .{}),
+            std.json.fmt(description, .{}),
+        });
+
+        // Roles array
+        try jw.print("  \"roles\": [", .{});
+        if (root.get("roles")) |roles_val| {
+            for (roles_val.array.items, 0..) |role, i| {
+                if (i > 0) try jw.print(", ", .{});
+                const role_obj = role.object;
+                try jw.print("\n    {{\n      \"agent_id\": {f},\n      \"role\": {f},\n      \"responsibilities\": {f}\n    }}", .{
+                    std.json.fmt((role_obj.get("agent_id") orelse continue).string, .{}),
+                    std.json.fmt((role_obj.get("role") orelse continue).string, .{}),
+                    std.json.fmt((role_obj.get("responsibilities") orelse continue).string, .{}),
+                });
+            }
+        }
+        try jw.print("\n  ],\n", .{});
+
+        try jw.print("  \"workflow\": {f}\n}}\n", .{std.json.fmt(workflow, .{})});
+
+        // Write to file
+        const file_name = try std.fmt.allocPrint(self.allocator, "{s}.json", .{id});
+        defer self.allocator.free(file_name);
+        const file_path = try std.fs.path.join(self.allocator, &.{ self.teams_dir, file_name });
+        defer self.allocator.free(file_path);
+
+        try std.fs.cwd().writeFile(.{ .sub_path = file_path, .data = json_buf.items });
+
+        // Load and register in memory
+        const team_def = try team_mod.loadTeam(self.allocator, file_path);
+        try self.teams.put(team_def.id, team_def);
+
+        std.log.info("[router] Created new team: {s} ({s}) with {d} roles", .{ name_val, id, team_def.roles.len });
+        return try std.fmt.allocPrint(self.allocator,
+            "Created team '{s}' ({s}) with {d} roles. You can now start a team task with it.",
+            .{ name_val, id, team_def.roles.len },
+        );
     }
 
     // ── Conversation Helpers ──────────────────────────────────────

@@ -118,6 +118,57 @@ pub fn loadAllTeams(allocator: std.mem.Allocator, dir_path: []const u8) !std.Str
     return teams;
 }
 
+/// Hot-reload teams that have changed on disk, and load newly created team files
+pub fn reloadTeams(allocator: std.mem.Allocator, teams: *std.StringHashMap(*TeamDef), dir_path: []const u8) void {
+    // Reload existing teams that changed
+    var it = teams.iterator();
+    while (it.next()) |entry| {
+        const tm = entry.value_ptr.*;
+        const path = tm.source_path orelse continue;
+
+        const current_mtime = agent_mod.getFileMtime(path) catch continue;
+        const last_mtime = tm.last_modified orelse current_mtime;
+
+        if (current_mtime > last_mtime) {
+            std.log.info("Reloading team: {s}", .{tm.id});
+
+            const new_team = loadTeam(allocator, path) catch |err| {
+                std.log.err("Reload failed for team {s}: {s}", .{tm.id, @errorName(err)});
+                continue;
+            };
+
+            freeTeam(allocator, tm);
+            entry.value_ptr.* = new_team;
+        }
+    }
+
+    // Scan for new team files not yet loaded
+    var dir = std.fs.cwd().openDir(dir_path, .{ .iterate = true }) catch return;
+    defer dir.close();
+
+    var dir_iter = dir.iterate();
+    while (dir_iter.next() catch return) |entry| {
+        if (!std.mem.endsWith(u8, entry.name, ".json")) continue;
+
+        const full_path = std.fs.path.join(allocator, &.{ dir_path, entry.name }) catch continue;
+        defer allocator.free(full_path);
+
+        // Try to load and check if ID already exists
+        const team_def = loadTeam(allocator, full_path) catch continue;
+
+        if (teams.contains(team_def.id)) {
+            freeTeam(allocator, team_def);
+            continue;
+        }
+
+        teams.put(team_def.id, team_def) catch {
+            freeTeam(allocator, team_def);
+            continue;
+        };
+        std.log.info("Discovered new team: {s} ({s})", .{team_def.name, team_def.id});
+    }
+}
+
 /// Validate that all agent_ids in the team exist in the agents map
 pub fn validateTeam(team: *const TeamDef, agents: *const std.StringHashMap(*agent_mod.AgentDef)) bool {
     for (team.roles) |role| {

@@ -1,45 +1,43 @@
-# SheyyBot v2.0 - Highly Intelligent Multi-Agent System
+# SheyyBot v3.0 - Self-Organizing Multi-Agent System
 
-A sophisticated multi-agent orchestration system built as a Telegram bot in Zig 0.14+. Features autonomous routing, advanced reasoning, self-reflection, and team collaboration capabilities.
+A self-organizing multi-agent Telegram bot built in Zig 0.14+. SheyyBot autonomously creates specialized agents and teams at runtime -- no manual configuration required. Give it a task and it assembles the right specialists on the fly.
 
 ## Overview
 
-SheyyBot is not just a simple Telegram-LLM bridge—it's a complete multi-agent platform with:
+SheyyBot goes beyond static agent routing. Its SuperAgent router has meta-tools that let it dynamically create new agents, form teams, and delegate work -- all without human intervention.
 
-- 🤖 **9 Specialized Agents** - Each with unique capabilities and tools
-- 🧠 **Chain-of-Thought Reasoning** - Step-by-step problem solving
-- 🔄 **Self-Reflection & Learning** - Improves from experience
-- ⚡ **Parallel Tool Execution** - Run multiple tools simultaneously
-- 📡 **Streaming Responses** - Real-time token streaming
-- 🧬 **Semantic Memory** - TF-IDF based intelligent retrieval
-- 🌐 **Web Fetch Tool** - Native HTTP client for research
-- 📁 **File & Image Support** - Upload and download capabilities
-- 🔧 **Systemd Service** - Production-ready deployment
+- **Self-Organizing** - The router creates new agents and teams on demand for any domain
+- **5 Meta-Tools** - respond_directly, delegate_to_agent, start_team_task, create_agent, create_team
+- **Team Hot-Reload** - Newly created teams are discovered and usable immediately
+- **Workspace Awareness** - The router understands the agents/, teams/, and skills/ directories
+- **Autonomous SDLC** - For software projects, it creates PM, architect, dev, QA, and DevOps agents with a coordinating team automatically
+- **MCP Integration** - External tool servers via Model Context Protocol
+- **Streaming Responses** - Real-time token streaming for responsive UX
+- **Persistent Memory** - Conversation history and semantic memory with TF-IDF retrieval
 
 ## Architecture
 
 ```
 Layer 4: Application
-├── main.zig              - Entry point, message routing
-├── router.zig            - Autonomous message routing (Super Agent)
-└── memory_cortex.zig     - Persistent memory with semantic search
+  main.zig              - Entry point, per-chat state, command dispatch
+  router.zig            - SuperAgent with 5 meta-tools (routing, agent/team creation)
 
 Layer 3: Team & Orchestration
-├── orchestrator.zig      - Multi-agent task coordination
-└── team.zig              - Team definitions and role management
+  orchestrator.zig      - Multi-agent task coordination (state machine)
+  team.zig              - Team definitions and role management
 
 Layer 2: Agent Runtime
-├── agent.zig             - Agent execution with CoT & reflection
-└── conversation.zig      - Message history persistence
+  agent.zig             - Agent execution with tool-use loop (up to 15 iterations)
+  conversation.zig      - Message history persistence
 
 Layer 1: Tool System
-├── tools.zig             - Tool registry (bash, fetch)
-└── mcp.zig               - MCP client for external tools
+  tools.zig             - Tool registry (bash) with JSON schema generation
+  mcp.zig               - MCP client for external tool servers
 
 Layer 0: Infrastructure
-├── config.zig            - Configuration management
-├── telegram.zig          - Telegram Bot API client
-└── llm.zig               - LLM API client with retry logic
+  config.zig            - Configuration management (auth, models, allowed users)
+  telegram.zig          - Telegram Bot API client (polling, messaging)
+  llm.zig               - LLM client (OpenAI + Anthropic formats, tool-calling)
 ```
 
 ## Quick Start
@@ -57,14 +55,11 @@ Layer 0: Infrastructure
 git clone https://github.com/rahulvramesh/sheyy.git
 cd sheyy
 
-# Build the project
+# Option 1: One-command setup
+./install.sh
+
+# Option 2: Manual build
 zig build -Doptimize=ReleaseFast
-
-# Configure
-# Edit auth.json and models.json with your credentials
-
-# Run
-zig build run
 ```
 
 ### Configuration
@@ -91,51 +86,50 @@ zig build run
 [123456789, 987654321]
 ```
 
-## Deployment
-
-### Systemd Service (Production)
+### Running
 
 ```bash
-# One-command setup
-sudo ./scripts/setup-service.sh
-sudo ./scripts/deploy.sh
+# Run with current directory as working directory
+zig build run
 
-# Check status
-sudo systemctl status sheyybot
-sudo journalctl -u sheyybot -f
+# Run with explicit working directory
+zig build run -- /path/to/workdir
 ```
 
-### Docker (Optional)
+## How Self-Organization Works
 
-```dockerfile
-# Dockerfile
-FROM alpine:latest
-RUN apk add --no-cache zig
-COPY . /app
-WORKDIR /app
-RUN zig build -Doptimize=ReleaseFast
-CMD ["./zig-out/bin/my_zig_agent"]
-```
+The SuperAgent router is the entry point for every message. It uses an LLM with five meta-tools to decide what to do:
+
+| Meta-Tool | Purpose |
+|-----------|---------|
+| `respond_directly` | Handle greetings, simple questions, general knowledge |
+| `delegate_to_agent` | Route to a specialist agent for focused tasks |
+| `start_team_task` | Launch a multi-agent team for complex projects |
+| `create_agent` | Create a new specialist agent when none fits the task |
+| `create_team` | Design and create a new team with roles and workflow |
+
+The router is workspace-aware. It knows which agents, teams, and skills already exist and only creates new ones when needed. Created agents and teams are written to the agents/ and teams/ directories and are available immediately.
+
+### Example: SDLC Project
+
+When you ask SheyyBot to build a web application, the router may:
+
+1. Create agents: project_manager, architect, frontend_dev, backend_dev, qa_engineer, devops
+2. Create a team with those agents assigned lead/member/reviewer roles
+3. Start the team task, which triggers the orchestrator state machine:
+   - **Gathering** - PM agent gathers requirements
+   - **Planning** - PM creates subtasks
+   - **Executing** - Engineers implement each subtask
+   - **Reviewing** - Reviewer validates results
+   - **Done** - Final output delivered
+
+All of this happens autonomously from a single message.
 
 ## Agents
 
-### Available Agents
-
-| Agent | Description | Tools | Skills |
-|-------|-------------|-------|--------|
-| **assistant** | General purpose assistant | bash | reasoning, web_search |
-| **software_engineer** | Code development expert | bash | debugging, reasoning, web_dev, github, web_search |
-| **code_architect** | System design specialist | bash | system_design, reasoning, debugging |
-| **debug_expert** | Debugging specialist | bash | debugging, reasoning, web_search |
-| **research_assistant** | Web research expert | bash, fetch | web_research, web_search |
-| **project_manager** | Task planning & coordination | bash | system_design, reasoning |
-| **code_reviewer** | Code review specialist | bash | debugging, reasoning, web_search |
-| **coder** | Quick code assistant | bash | debugging, reasoning |
-| **creative** | Creative writing | bash | reasoning, web_search |
-
 ### Agent Configuration
 
-Agents are defined in JSON files:
+Agents are JSON files in the agents/ directory:
 
 ```json
 {
@@ -147,16 +141,16 @@ Agents are defined in JSON files:
     "system_prompt": "You are a senior software engineer...",
     "temperature": 0.3
   },
-  "tools": ["bash", "fetch"],
-  "skills": ["github.md", "web_dev.md", "debugging.md"],
-  "enable_reasoning": true,
-  "enable_reflection": true
+  "tools": ["bash"],
+  "skills": ["github.md", "web_dev.md", "debugging.md"]
 }
 ```
 
+Agents without a `tools` field work as simple persona chat (backward-compatible).
+
 ### Skills
 
-Skills are markdown files injected into agent prompts:
+Skills are markdown files in the skills/ directory, injected into agent system prompts at runtime:
 
 ```markdown
 <!-- skills/web_research.md -->
@@ -169,9 +163,47 @@ When searching the web:
 4. Document sources in responses
 ```
 
-## Commands
+### Adding Agents and Skills
 
-### User Commands
+You can add agents and skills manually or let the router create them. To add manually:
+
+1. Create `agents/my_agent.json` with the schema above
+2. Optionally create skill files in `skills/`
+3. Reload with the `/reload` command
+
+## Teams
+
+Teams coordinate multiple agents on complex tasks:
+
+```json
+{
+  "id": "web_dev",
+  "name": "Web Development Team",
+  "description": "Full-stack web development team",
+  "roles": [
+    {
+      "agent_id": "project_manager",
+      "role": "lead",
+      "responsibilities": "Gather requirements and plan architecture"
+    },
+    {
+      "agent_id": "software_engineer",
+      "role": "member",
+      "responsibilities": "Implement frontend and backend"
+    },
+    {
+      "agent_id": "code_reviewer",
+      "role": "reviewer",
+      "responsibilities": "Review code for quality and security"
+    }
+  ],
+  "workflow": "PM plans -> Engineer implements -> Reviewer validates"
+}
+```
+
+Teams created by the router follow the same schema and are hot-reloaded automatically.
+
+## Commands
 
 ```
 /help              - Show all commands
@@ -199,132 +231,38 @@ When searching the web:
 /reload            - Reload agents/teams
 ```
 
-## Advanced Features
+## MCP Server Integration
 
-### Chain-of-Thought Reasoning
-
-Enable step-by-step reasoning for complex problems:
-
-```zig
-agent_runtime.enableCoT(.zero_shot);
-// or .few_shot with examples
-// or .self_consistency for multiple reasoning paths
-```
-
-The agent will show its reasoning process:
-```
-Step 1: Observing that...
-Step 2: Thinking about...
-Step 3: Taking action...
-Final Answer: ...
-```
-
-### Self-Reflection & Learning
-
-Agents automatically reflect on completed tasks:
-
-```zig
-agent_runtime.enable_reflection = true;
-agent_runtime.min_reflection_confidence = 0.7;
-```
-
-Reflections are stored with `#reflection` tag and automatically retrieved for similar future tasks.
-
-### Semantic Memory Search
-
-Find memories by meaning, not just keywords:
-
-```zig
-const results = cortex.searchSemantic("authentication bug", 5, 0.6);
-// Returns memories sorted by TF-IDF cosine similarity
-```
-
-### Parallel Tool Execution
-
-Execute independent tools simultaneously:
-
-```zig
-// Tools that don't depend on each other run in parallel
-const results = try agent_runtime.executeToolsParallel(calls, 5);
-// Up to 5 tools concurrently, maintaining result order
-```
-
-### Streaming Responses
-
-Real-time token streaming for better UX:
-
-```json
-// models.json
-{
-  "enable_streaming": true
-}
-```
-
-Responses appear word-by-word instead of waiting for full completion.
-
-### Retry Logic
-
-Automatic retry with exponential backoff:
-
-- Retries on: timeouts, rate limits, 5xx errors
-- Delays: 1s, 2s, 4s, 8s (with ±25% jitter)
-- Max 3 retries before failure
-
-### File Support
-
-Upload files to the bot:
-- Photos up to 20MB
-- Documents up to 50MB
-- Files saved to `workspaces/{chat_id}/files/`
-- Agents can reference files in bash commands
-
-## Teams
-
-Define multi-agent teams for complex tasks:
+Optional external tool servers via Model Context Protocol. Configure in `mcp_servers.json`:
 
 ```json
 {
-  "id": "web_dev",
-  "name": "Web Development Team",
-  "description": "Full-stack web development team",
-  "roles": [
-    {
-      "agent_id": "project_manager",
-      "role": "lead",
-      "responsibilities": "Gather requirements and plan architecture"
-    },
-    {
-      "agent_id": "software_engineer",
-      "role": "member",
-      "responsibilities": "Implement frontend and backend"
-    },
-    {
-      "agent_id": "code_reviewer",
-      "role": "reviewer",
-      "responsibilities": "Review code for quality and security"
-    }
-  ],
-  "workflow": "PM plans → Engineer implements → Reviewer validates"
+  "exa": {
+    "command": "npx",
+    "args": ["-y", "exa-mcp-server"],
+    "env": { "EXA_API_KEY": "..." }
+  }
 }
 ```
+
+MCP tools are auto-discovered at startup and registered alongside `bash` in the tool registry. The agent runtime routes tool calls to the appropriate MCP server.
 
 ## Memory System
 
-### Storage
+Conversations and memories are persisted to the working directory:
 
-Conversations and memories are persisted to:
 ```
-/var/lib/sheyybot/
-├── memory/
-│   ├── chat_{id}.json       # Conversation history
-│   └── cortex.json          # Memory entries
-└── workspaces/
-    └── {chat_id}/
-        ├── files/           # Uploaded files
-        └── task_{id}/       # Task working directories
+workdir/
+  memory/
+    chat_{id}.json       # Conversation history
+    cortex.json          # Memory entries
+  workspaces/
+    {chat_id}/
+      files/             # Uploaded files
+      task_{id}/         # Task working directories
 ```
 
-### Memory Commands
+Relevant memories are automatically injected into context based on TF-IDF similarity scoring.
 
 ```
 /memory add Meeting with John tomorrow at 3pm #meeting #john
@@ -334,9 +272,30 @@ Conversations and memories are persisted to:
 /memory clear
 ```
 
-### Auto-Retrieval
+## Deployment
 
-Relevant memories are automatically injected into context based on TF-IDF similarity scoring.
+### Systemd Service (Production)
+
+```bash
+# One-command setup
+sudo ./scripts/setup-service.sh
+sudo ./scripts/deploy.sh
+
+# Check status
+sudo systemctl status sheyybot
+sudo journalctl -u sheyybot -f
+```
+
+### Docker (Optional)
+
+```dockerfile
+FROM alpine:latest
+RUN apk add --no-cache zig
+COPY . /app
+WORKDIR /app
+RUN zig build -Doptimize=ReleaseFast
+CMD ["./zig-out/bin/my_zig_agent"]
+```
 
 ## Testing
 
@@ -349,32 +308,6 @@ kcov --include-path=./src ./coverage zig build test
 
 # Specific file tests
 zig test src/agent.zig
-zig test src/memory_cortex.zig
-```
-
-### Test Coverage
-
-- **138 tests** across all modules
-- Unit tests for each source file
-- Integration tests for orchestration
-- Error case coverage
-- Mock-based testing for external APIs
-
-## CI/CD
-
-GitHub Actions workflows:
-
-```yaml
-# .github/workflows/ci.yml
-- Run on every push/PR
-- Test with Zig 0.14.0
-- Build release binary
-- Check formatting
-
-# .github/workflows/release.yml
-- Trigger on v* tags
-- Create GitHub release
-- Attach binary artifacts
 ```
 
 ## Performance
@@ -385,8 +318,7 @@ GitHub Actions workflows:
 | Memory Usage | ~10-50MB runtime |
 | Startup Time | <1 second |
 | Tool Timeout | 30 seconds |
-| Max Tool Iterations | 15 |
-| Parallel Tools | Up to 5 concurrent |
+| Max Tool Iterations | 15 per agent turn |
 | Context Window | Configurable (default 50 messages) |
 
 ## Troubleshooting
@@ -426,37 +358,8 @@ sudo systemctl status sheyybot
 # View memory stats
 sudo journalctl -u sheyybot | grep -i memory
 
-# Clear old memories
-# Use /memory clear command or delete /var/lib/sheyybot/memory/
+# Clear old memories via /memory clear or delete memory/ directory
 ```
-
-## Development
-
-### Adding a New Tool
-
-1. Define tool in `src/tools.zig`:
-```zig
-pub const MyTool = struct {
-    pub const SCHEMA = "...";
-    pub fn execute(allocator, args) !ToolResult { ... }
-};
-```
-
-2. Register in `ToolRegistry`
-
-3. Add to agent's `tools` array in JSON
-
-### Adding a New Agent
-
-1. Create `agents/my_agent.json`
-2. Define tools and skills
-3. Reload with `/reload` command
-
-### Adding a New Skill
-
-1. Create `skills/my_skill.md`
-2. Write skill documentation
-3. Reference in agent's `skill_names`
 
 ## Security
 
@@ -476,12 +379,12 @@ pub const MyTool = struct {
 - Small binary size
 - C interoperability
 
-### Why Multi-Agent?
+### Why Self-Organizing?
 
-- Specialization beats generalization
-- Parallel execution of subtasks
-- Better context management
-- Clear responsibility boundaries
+- No upfront configuration needed for new domains
+- The system adapts to whatever you throw at it
+- Agents are created with appropriate tools and skills
+- Teams form naturally around project requirements
 
 ### Why Telegram?
 
@@ -500,11 +403,12 @@ pub const MyTool = struct {
 
 ## Roadmap
 
-- [x] Chain-of-Thought reasoning
-- [x] Self-reflection & learning
-- [x] Parallel tool execution
+- [x] Multi-agent orchestration with teams
+- [x] Autonomous SuperAgent routing
+- [x] Self-organizing agent and team creation
+- [x] MCP tool server integration
 - [x] Streaming responses
-- [x] Semantic memory
+- [x] Semantic memory with TF-IDF
 - [x] File support
 - [x] Systemd service
 - [ ] Voice message support
@@ -515,7 +419,7 @@ pub const MyTool = struct {
 
 ## License
 
-MIT License - See LICENSE file for details
+MIT License - See LICENSE file for details.
 
 ## Acknowledgments
 
@@ -527,6 +431,6 @@ MIT License - See LICENSE file for details
 
 ---
 
-**Version**: 2.0  
-**Last Updated**: March 2026  
-**Status**: Production Ready ✅
+**Version**: 3.0
+**Last Updated**: March 2026
+**Status**: Production Ready

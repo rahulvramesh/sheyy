@@ -1,3 +1,8 @@
+# Build status badge:
+# ![CI](https://github.com/<OWNER>/<REPO>/actions/workflows/ci.yml/badge.svg)
+# Replace <OWNER>/<REPO> with your GitHub repository path, e.g.:
+# ![CI](https://github.com/sheyy/my_zig_agent/actions/workflows/ci.yml/badge.svg)
+
 name: CI
 
 on:
@@ -32,18 +37,24 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-zig-
 
+      - name: Check formatting
+        run: zig fmt --check src/
+
       - name: Run tests
         run: zig build test
 
       - name: Build release binary
         run: zig build -Doptimize=ReleaseFast
 
-      - name: Check formatting
-        run: zig fmt --check src/
+      - name: Set artifact metadata
+        id: meta
+        run: |
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: my_zig_agent-${{ github.sha }}
+          name: my_zig_agent-${{ steps.meta.outputs.date }}-${{ steps.meta.outputs.short_sha }}
           path: zig-out/bin/my_zig_agent
           retention-days: 7

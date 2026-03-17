@@ -816,6 +816,7 @@ fn handleCommand(state: *AppState, chat_id: i64, text: []const u8) void {
 
     if (std.mem.eql(u8, cmd, "reload")) {
         agent_mod.reloadAgents(state.allocator, &state.agents);
+        team_mod.reloadTeams(state.allocator, &state.teams, "teams");
         state.tg.sendMessage(chat_id, "Configs reloaded.") catch {};
         return;
     }
@@ -1228,6 +1229,10 @@ pub fn main() !void {
         models_parsed.value.model_name,
         persist_dir,
         &conversations,
+        workspace_dir,
+        agents_dir,
+        teams_dir,
+        skills_dir,
     );
     defer super_agent.deinit();
 
