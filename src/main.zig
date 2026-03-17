@@ -351,46 +351,67 @@ fn handleFileMessage(state: *AppState, msg: telegram.Message) !?FileMetadata {
 }
 
 fn buildMessageWithContext(state: *AppState, chat_id: i64, text: ?[]const u8, file_metadata: ?FileMetadata) ![]const u8 {
-    var parts: std.ArrayList([]const u8) = .empty;
-    defer parts.deinit(state.allocator);
+    // Build message context with proper memory management
+    // Track which strings need to be freed
+    var allocated_strings: std.ArrayList([]const u8) = .empty;
+    defer allocated_strings.deinit(state.allocator);
+    defer {
+        for (allocated_strings.items) |s| {
+            state.allocator.free(s);
+        }
+    }
+
+    var total_len: usize = 0;
 
     // Add text content
     if (text) |t| {
-        try parts.append(state.allocator, t);
+        total_len += t.len;
     }
 
     // Add file information
+    var file_info: ?[]const u8 = null;
     if (file_metadata) |meta| {
-        if (text != null) try parts.append(state.allocator, "\n\n");
+        if (text != null) total_len += 2; // "\n\n"
 
-        const file_info = try std.fmt.allocPrint(state.allocator, "[File received: {s} ({d} bytes)]\nSaved to: {s}", .{ meta.original_name orelse "unnamed", meta.size, meta.path });
-        try parts.append(state.allocator, file_info);
+        file_info = try std.fmt.allocPrint(state.allocator, "[File received: {s} ({d} bytes)]\nSaved to: {s}", .{ meta.original_name orelse "unnamed", meta.size, meta.path });
+        try allocated_strings.append(state.allocator, file_info.?);
+        total_len += file_info.?.len;
     }
 
     // Add available files context
     const file_context = try state.file_manager.getFileContext(chat_id, state.allocator);
     defer state.allocator.free(file_context);
-    if (file_context.len > 0) {
-        try parts.append(state.allocator, file_context);
+    const has_file_context = file_context.len > 0;
+    if (has_file_context) {
+        total_len += file_context.len;
     }
 
-    // Join all parts
-    var total_len: usize = 0;
-    for (parts.items) |p| total_len += p.len;
-
+    // Allocate result
     var result = try state.allocator.alloc(u8, total_len);
     var offset: usize = 0;
-    for (parts.items) |p| {
-        @memcpy(result[offset .. offset + p.len], p);
-        offset += p.len;
+
+    // Copy text
+    if (text) |t| {
+        @memcpy(result[offset .. offset + t.len], t);
+        offset += t.len;
     }
 
-    // Free allocated parts
-    for (parts.items) |p| {
-        // Don't free the original text pointer, only allocated strings
-        if (p.ptr != text.?.ptr and (file_metadata == null or p.ptr != file_metadata.?.path.ptr)) {
-            state.allocator.free(p);
+    // Copy separator and file info
+    if (file_metadata != null) {
+        if (text != null) {
+            @memcpy(result[offset .. offset + 2], "\n\n");
+            offset += 2;
         }
+        if (file_info) |info| {
+            @memcpy(result[offset .. offset + info.len], info);
+            offset += info.len;
+        }
+    }
+
+    // Copy file context
+    if (has_file_context) {
+        @memcpy(result[offset .. offset + file_context.len], file_context);
+        offset += file_context.len;
     }
 
     return result;
