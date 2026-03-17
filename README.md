@@ -1,6 +1,6 @@
 # SheyyBot v3.0 - Self-Organizing Multi-Agent System
 
-A self-organizing multi-agent Telegram bot built in Zig 0.14+. SheyyBot autonomously creates specialized agents and teams at runtime -- no manual configuration required. Give it a task and it assembles the right specialists on the fly.
+A self-organizing multi-agent Telegram bot built in Zig 0.15+. SheyyBot autonomously creates specialized agents and teams at runtime -- no manual configuration required. Give it a task and it assembles the right specialists on the fly.
 
 ## Overview
 
@@ -44,7 +44,7 @@ Layer 0: Infrastructure
 
 ### Prerequisites
 
-- Zig 0.14.0 or later
+- Zig 0.15.2 or later
 - Telegram Bot Token (from @BotFather)
 - OpenAI-compatible LLM API key
 

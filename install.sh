@@ -29,7 +29,7 @@ step()    { echo -e "\n${CYAN}${BOLD}=> $*${NC}"; }
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-ZIG_VERSION="0.14.0"
+ZIG_VERSION="0.15.2"
 ZIG_INSTALL_DIR="/usr/local/lib/zig"
 SERVICE_USER="sheyybot"
 SERVICE_GROUP="sheyybot"
@@ -142,7 +142,7 @@ install_deps
 success "System dependencies ready"
 
 # ---------------------------------------------------------------------------
-# Install Zig 0.14.0
+# Install Zig 0.15.2
 # ---------------------------------------------------------------------------
 step "Checking for Zig ${ZIG_VERSION}"
 

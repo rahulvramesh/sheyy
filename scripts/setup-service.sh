@@ -65,8 +65,8 @@ install_zig() {
             ;;
     esac
     
-    # Download and install Zig 0.14.0
-    ZIG_VERSION="0.14.0"
+    # Download and install Zig 0.15.2
+    ZIG_VERSION="0.15.2"
     ARCH=$(uname -m)
     case $ARCH in
         x86_64)

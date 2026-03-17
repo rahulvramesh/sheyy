@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A self-organizing multi-agent orchestration system built as a Telegram bot in Zig 0.14+. The SuperAgent (router) can dynamically create agents and teams at runtime — no manual configuration needed. Agents have tools (bash execution) and skills (markdown knowledge files). Teams of agents collaborate on complex tasks coordinated by an orchestrator.
+A self-organizing multi-agent orchestration system built as a Telegram bot in Zig 0.15+. The SuperAgent (router) can dynamically create agents and teams at runtime — no manual configuration needed. Agents have tools (bash execution) and skills (markdown knowledge files). Teams of agents collaborate on complex tasks coordinated by an orchestrator.
 
 ## Build & Test Commands
 
