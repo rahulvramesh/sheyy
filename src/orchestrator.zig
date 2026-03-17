@@ -496,3 +496,539 @@ pub const Orchestrator = struct {
         return try self.allocator.dupe(u8, buf.items);
     }
 };
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "TaskSession init and deinit" {
+    const allocator = std.testing.allocator;
+
+    const team = try allocator.create(team_mod.TeamDef);
+    defer allocator.destroy(team);
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "test_team"),
+        .name = try allocator.dupe(u8, "Test Team"),
+        .description = try allocator.dupe(u8, "Test team"),
+        .roles = try allocator.alloc(team_mod.TeamRole, 0),
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+    }
+
+    var session = try TaskSession.init(allocator, 12345, team, "Test request", "/tmp/work");
+    defer session.deinit();
+
+    try std.testing.expectEqual(@as(i64, 12345), session.chat_id);
+    try std.testing.expectEqual(OrchestratorState.gathering, session.state);
+    try std.testing.expectEqualStrings("Test request", session.user_request);
+    try std.testing.expectEqualStrings("/tmp/work", session.working_dir);
+    try std.testing.expectEqual(@as(usize, 0), session.subtasks.items.len);
+}
+
+test "Orchestrator init and deinit" {
+    const allocator = std.testing.allocator;
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    var teams = std.StringHashMap(*team_mod.TeamDef).init(allocator);
+    defer teams.deinit();
+
+    const runtime = try allocator.create(agent_mod.AgentRuntime);
+    defer allocator.destroy(runtime);
+
+    const tg = try allocator.create(telegram.TelegramClient);
+    defer allocator.destroy(tg);
+
+    const llm_client = try allocator.create(llm.LlmClient);
+    defer allocator.destroy(llm_client);
+
+    var orchestrator = Orchestrator.init(
+        allocator,
+        &agents,
+        &teams,
+        runtime,
+        tg,
+        llm_client,
+        "/tmp/workspace",
+    );
+    defer orchestrator.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), orchestrator.active_sessions.count());
+}
+
+test "Orchestrator getSession returns null for unknown chat" {
+    const allocator = std.testing.allocator;
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    var teams = std.StringHashMap(*team_mod.TeamDef).init(allocator);
+    defer teams.deinit();
+
+    const runtime = try allocator.create(agent_mod.AgentRuntime);
+    defer allocator.destroy(runtime);
+
+    const tg = try allocator.create(telegram.TelegramClient);
+    defer allocator.destroy(tg);
+
+    const llm_client = try allocator.create(llm.LlmClient);
+    defer allocator.destroy(llm_client);
+
+    var orchestrator = Orchestrator.init(
+        allocator,
+        &agents,
+        &teams,
+        runtime,
+        tg,
+        llm_client,
+        "/tmp/workspace",
+    );
+    defer orchestrator.deinit();
+
+    try std.testing.expect(orchestrator.getSession(99999) == null);
+}
+
+test "findRoleAgentId finds matching role" {
+    const allocator = std.testing.allocator;
+
+    const team = try allocator.create(team_mod.TeamDef);
+    defer allocator.destroy(team);
+
+    const roles = try allocator.alloc(team_mod.TeamRole, 3);
+    roles[0] = .{
+        .agent_id = try allocator.dupe(u8, "pm_1"),
+        .role = try allocator.dupe(u8, "lead"),
+        .responsibilities = try allocator.dupe(u8, "PM duties"),
+    };
+    roles[1] = .{
+        .agent_id = try allocator.dupe(u8, "dev_1"),
+        .role = try allocator.dupe(u8, "member"),
+        .responsibilities = try allocator.dupe(u8, "Coding"),
+    };
+    roles[2] = .{
+        .agent_id = try allocator.dupe(u8, "reviewer_1"),
+        .role = try allocator.dupe(u8, "reviewer"),
+        .responsibilities = try allocator.dupe(u8, "Reviewing"),
+    };
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "test_team"),
+        .name = try allocator.dupe(u8, "Test Team"),
+        .description = try allocator.dupe(u8, "Test team"),
+        .roles = roles,
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        for (team.roles) |r| {
+            allocator.free(r.agent_id);
+            allocator.free(r.role);
+            allocator.free(r.responsibilities);
+        }
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+    }
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    const runtime = try allocator.create(agent_mod.AgentRuntime);
+    defer allocator.destroy(runtime);
+
+    const tg = try allocator.create(telegram.TelegramClient);
+    defer allocator.destroy(tg);
+
+    const llm_client = try allocator.create(llm.LlmClient);
+    defer allocator.destroy(llm_client);
+
+    var orchestrator = Orchestrator.init(
+        allocator,
+        &agents,
+        undefined,
+        runtime,
+        tg,
+        llm_client,
+        "/tmp/workspace",
+    );
+    defer orchestrator.deinit();
+
+    const lead_id = orchestrator.findRoleAgentId(team, "lead");
+    try std.testing.expect(lead_id != null);
+    try std.testing.expectEqualStrings("pm_1", lead_id.?);
+
+    const member_id = orchestrator.findRoleAgentId(team, "member");
+    try std.testing.expect(member_id != null);
+    try std.testing.expectEqualStrings("dev_1", member_id.?);
+
+    const reviewer_id = orchestrator.findRoleAgentId(team, "reviewer");
+    try std.testing.expect(reviewer_id != null);
+    try std.testing.expectEqualStrings("reviewer_1", reviewer_id.?);
+
+    const unknown_id = orchestrator.findRoleAgentId(team, "unknown");
+    try std.testing.expect(unknown_id == null);
+}
+
+test "parsePlan extracts subtasks from PM response" {
+    const allocator = std.testing.allocator;
+
+    const team = try allocator.create(team_mod.TeamDef);
+    defer allocator.destroy(team);
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "test_team"),
+        .name = try allocator.dupe(u8, "Test Team"),
+        .description = try allocator.dupe(u8, "Test team"),
+        .roles = try allocator.alloc(team_mod.TeamRole, 0),
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+    }
+
+    var session = try TaskSession.init(allocator, 12345, team, "Create a web app", "/tmp/work");
+    defer session.deinit();
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    const runtime = try allocator.create(agent_mod.AgentRuntime);
+    defer allocator.destroy(runtime);
+
+    const tg = try allocator.create(telegram.TelegramClient);
+    defer allocator.destroy(tg);
+
+    const llm_client = try allocator.create(llm.LlmClient);
+    defer allocator.destroy(llm_client);
+
+    var orchestrator = Orchestrator.init(
+        allocator,
+        &agents,
+        undefined,
+        runtime,
+        tg,
+        llm_client,
+        "/tmp/workspace",
+    );
+    defer orchestrator.deinit();
+
+    const pm_response =
+        \\PLAN_READY
+        \\Some explanation here
+        \\SUBTASK: Setup project | Initialize the repository and project structure | member
+        \\SUBTASK: Implement API | Create REST endpoints for the application | member
+        \\SUBTASK: Review code | Check code quality and best practices | reviewer
+    ;
+
+    try orchestrator.parsePlan(&session, pm_response);
+
+    try std.testing.expectEqual(@as(usize, 3), session.subtasks.items.len);
+
+    try std.testing.expectEqualStrings("Setup project", session.subtasks.items[0].title);
+    try std.testing.expectEqualStrings("Initialize the repository and project structure", session.subtasks.items[0].description);
+    try std.testing.expectEqualStrings("member", session.subtasks.items[0].assigned_role);
+
+    try std.testing.expectEqualStrings("Implement API", session.subtasks.items[1].title);
+    try std.testing.expectEqualStrings("Create REST endpoints for the application", session.subtasks.items[1].description);
+
+    try std.testing.expectEqualStrings("Review code", session.subtasks.items[2].title);
+    try std.testing.expectEqualStrings("reviewer", session.subtasks.items[2].assigned_role);
+}
+
+test "parsePlan creates default subtask when none parsed" {
+    const allocator = std.testing.allocator;
+
+    const team = try allocator.create(team_mod.TeamDef);
+    defer allocator.destroy(team);
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "test_team"),
+        .name = try allocator.dupe(u8, "Test Team"),
+        .description = try allocator.dupe(u8, "Test team"),
+        .roles = try allocator.alloc(team_mod.TeamRole, 0),
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+    }
+
+    var session = try TaskSession.init(allocator, 12345, team, "Create a web app", "/tmp/work");
+    defer session.deinit();
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    const runtime = try allocator.create(agent_mod.AgentRuntime);
+    defer allocator.destroy(runtime);
+
+    const tg = try allocator.create(telegram.TelegramClient);
+    defer allocator.destroy(tg);
+
+    const llm_client = try allocator.create(llm.LlmClient);
+    defer allocator.destroy(llm_client);
+
+    var orchestrator = Orchestrator.init(
+        allocator,
+        &agents,
+        undefined,
+        runtime,
+        tg,
+        llm_client,
+        "/tmp/workspace",
+    );
+    defer orchestrator.deinit();
+
+    const pm_response = "PLAN_READY\nBut no subtask format found";
+
+    try orchestrator.parsePlan(&session, pm_response);
+
+    try std.testing.expectEqual(@as(usize, 1), session.subtasks.items.len);
+    try std.testing.expectEqualStrings("Execute task", session.subtasks.items[0].title);
+    try std.testing.expectEqualStrings("Create a web app", session.subtasks.items[0].description);
+    try std.testing.expectEqualStrings("member", session.subtasks.items[0].assigned_role);
+}
+
+test "formatPlanMessage generates correct output" {
+    const allocator = std.testing.allocator;
+
+    const team = try allocator.create(team_mod.TeamDef);
+    defer allocator.destroy(team);
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "test_team"),
+        .name = try allocator.dupe(u8, "Test Team"),
+        .description = try allocator.dupe(u8, "Test team"),
+        .roles = try allocator.alloc(team_mod.TeamRole, 0),
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+    }
+
+    var session = try TaskSession.init(allocator, 12345, team, "Test request", "/tmp/work");
+    defer session.deinit();
+
+    try session.subtasks.append(allocator, .{
+        .id = 0,
+        .title = try allocator.dupe(u8, "Task 1"),
+        .description = try allocator.dupe(u8, "First task"),
+        .assigned_role = try allocator.dupe(u8, "member"),
+        .state = .pending,
+        .result = null,
+    });
+    try session.subtasks.append(allocator, .{
+        .id = 1,
+        .title = try allocator.dupe(u8, "Task 2"),
+        .description = try allocator.dupe(u8, "Second task"),
+        .assigned_role = try allocator.dupe(u8, "reviewer"),
+        .state = .pending,
+        .result = null,
+    });
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    const runtime = try allocator.create(agent_mod.AgentRuntime);
+    defer allocator.destroy(runtime);
+
+    const tg = try allocator.create(telegram.TelegramClient);
+    defer allocator.destroy(tg);
+
+    const llm_client = try allocator.create(llm.LlmClient);
+    defer allocator.destroy(llm_client);
+
+    var orchestrator = Orchestrator.init(
+        allocator,
+        &agents,
+        undefined,
+        runtime,
+        tg,
+        llm_client,
+        "/tmp/workspace",
+    );
+    defer orchestrator.deinit();
+
+    const message = try orchestrator.formatPlanMessage(&session);
+    defer allocator.free(message);
+
+    try std.testing.expect(std.mem.indexOf(u8, message, "Plan ready (2 subtasks)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, message, "1. Task 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, message, "2. Task 2") != null);
+    try std.testing.expect(std.mem.indexOf(u8, message, "assigned: member") != null);
+    try std.testing.expect(std.mem.indexOf(u8, message, "assigned: reviewer") != null);
+}
+
+test "formatRoles generates role list" {
+    const allocator = std.testing.allocator;
+
+    const team = try allocator.create(team_mod.TeamDef);
+    defer allocator.destroy(team);
+
+    const roles = try allocator.alloc(team_mod.TeamRole, 2);
+    roles[0] = .{
+        .agent_id = try allocator.dupe(u8, "agent_1"),
+        .role = try allocator.dupe(u8, "lead"),
+        .responsibilities = try allocator.dupe(u8, "Leading"),
+    };
+    roles[1] = .{
+        .agent_id = try allocator.dupe(u8, "agent_2"),
+        .role = try allocator.dupe(u8, "member"),
+        .responsibilities = try allocator.dupe(u8, "Working"),
+    };
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "test_team"),
+        .name = try allocator.dupe(u8, "Test Team"),
+        .description = try allocator.dupe(u8, "Test team"),
+        .roles = roles,
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        for (team.roles) |r| {
+            allocator.free(r.agent_id);
+            allocator.free(r.role);
+            allocator.free(r.responsibilities);
+        }
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+    }
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    const runtime = try allocator.create(agent_mod.AgentRuntime);
+    defer allocator.destroy(runtime);
+
+    const tg = try allocator.create(telegram.TelegramClient);
+    defer allocator.destroy(tg);
+
+    const llm_client = try allocator.create(llm.LlmClient);
+    defer allocator.destroy(llm_client);
+
+    var orchestrator = Orchestrator.init(
+        allocator,
+        &agents,
+        undefined,
+        runtime,
+        tg,
+        llm_client,
+        "/tmp/workspace",
+    );
+    defer orchestrator.deinit();
+
+    const roles_str = try orchestrator.formatRoles(team);
+    defer allocator.free(roles_str);
+
+    try std.testing.expect(std.mem.indexOf(u8, roles_str, "lead (agent_1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, roles_str, "member (agent_2)") != null);
+}
+
+test "TaskState transitions" {
+    try std.testing.expectEqual(@as(u8, 0), @intFromEnum(TaskState.pending));
+    try std.testing.expectEqual(@as(u8, 1), @intFromEnum(TaskState.in_progress));
+    try std.testing.expectEqual(@as(u8, 2), @intFromEnum(TaskState.completed));
+    try std.testing.expectEqual(@as(u8, 3), @intFromEnum(TaskState.failed));
+}
+
+test "OrchestratorState enum values" {
+    try std.testing.expectEqual(@as(u8, 0), @intFromEnum(OrchestratorState.idle));
+    try std.testing.expectEqual(@as(u8, 1), @intFromEnum(OrchestratorState.gathering));
+    try std.testing.expectEqual(@as(u8, 2), @intFromEnum(OrchestratorState.planning));
+    try std.testing.expectEqual(@as(u8, 3), @intFromEnum(OrchestratorState.executing));
+    try std.testing.expectEqual(@as(u8, 4), @intFromEnum(OrchestratorState.reviewing));
+    try std.testing.expectEqual(@as(u8, 5), @intFromEnum(OrchestratorState.done));
+    try std.testing.expectEqual(@as(u8, 6), @intFromEnum(OrchestratorState.failed));
+}
+
+test "parsePlan handles subtask with missing role" {
+    const allocator = std.testing.allocator;
+
+    const team = try allocator.create(team_mod.TeamDef);
+    defer allocator.destroy(team);
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "test_team"),
+        .name = try allocator.dupe(u8, "Test Team"),
+        .description = try allocator.dupe(u8, "Test team"),
+        .roles = try allocator.alloc(team_mod.TeamRole, 0),
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+    }
+
+    var session = try TaskSession.init(allocator, 12345, team, "Test request", "/tmp/work");
+    defer session.deinit();
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    const runtime = try allocator.create(agent_mod.AgentRuntime);
+    defer allocator.destroy(runtime);
+
+    const tg = try allocator.create(telegram.TelegramClient);
+    defer allocator.destroy(tg);
+
+    const llm_client = try allocator.create(llm.LlmClient);
+    defer allocator.destroy(llm_client);
+
+    var orchestrator = Orchestrator.init(
+        allocator,
+        &agents,
+        undefined,
+        runtime,
+        tg,
+        llm_client,
+        "/tmp/workspace",
+    );
+    defer orchestrator.deinit();
+
+    const pm_response = "PLAN_READY\nSUBTASK: Simple Task | Just a description";
+
+    try orchestrator.parsePlan(&session, pm_response);
+
+    try std.testing.expectEqual(@as(usize, 1), session.subtasks.items.len);
+    try std.testing.expectEqualStrings("Simple Task", session.subtasks.items[0].title);
+    try std.testing.expectEqualStrings("Just a description", session.subtasks.items[0].description);
+    try std.testing.expectEqualStrings("member", session.subtasks.items[0].assigned_role);
+}

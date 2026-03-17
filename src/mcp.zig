@@ -544,3 +544,392 @@ pub fn loadMcpServers(
 
     return manager;
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "McpManager init and deinit" {
+    const allocator = std.testing.allocator;
+    var manager = McpManager.init(allocator);
+    defer manager.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), manager.toolCount());
+}
+
+test "McpManager isToolMcp returns false for unknown tool" {
+    const allocator = std.testing.allocator;
+    var manager = McpManager.init(allocator);
+    defer manager.deinit();
+
+    try std.testing.expect(!manager.isToolMcp("unknown_tool"));
+}
+
+test "McpManager toolCount aggregates across clients" {
+    const allocator = std.testing.allocator;
+    var manager = McpManager.init(allocator);
+    defer manager.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), manager.toolCount());
+}
+
+test "McpClient initialization with dummy server" {
+    const allocator = std.testing.allocator;
+
+    const config_path = "/tmp/test_mcp_config.json";
+    const config_content =
+        \\{"test_server": {"command": "echo", "args": ["test"]}}
+    ;
+
+    try std.fs.cwd().writeFile(.{
+        .sub_path = config_path,
+        .data = config_content,
+    });
+    defer std.fs.cwd().deleteFile(config_path) catch {};
+
+    var manager = try loadMcpServers(allocator, config_path);
+    defer manager.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), manager.toolCount());
+}
+
+test "parseToolsResponse extracts tools correctly" {
+    const allocator = std.testing.allocator;
+
+    const client = try allocator.create(McpClient);
+    defer allocator.destroy(client);
+    errdefer allocator.destroy(client);
+
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = false,
+    };
+    defer {
+        allocator.free(client.name);
+        client.tools.deinit(allocator);
+    }
+
+    const response =
+        \\{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"test_tool","description":"A test tool","inputSchema":{"type":"object","properties":{"arg":{"type":"string"}}}}]}}
+    ;
+
+    try client.parseToolsResponse(response);
+
+    try std.testing.expectEqual(@as(usize, 1), client.tools.items.len);
+    try std.testing.expectEqualStrings("test_tool", client.tools.items[0].name);
+    try std.testing.expectEqualStrings("A test tool", client.tools.items[0].description);
+}
+
+test "parseToolsResponse handles missing fields" {
+    const allocator = std.testing.allocator;
+
+    const client = try allocator.create(McpClient);
+    defer allocator.destroy(client);
+
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = false,
+    };
+    defer {
+        allocator.free(client.name);
+        client.tools.deinit(allocator);
+    }
+
+    const response =
+        \\{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"minimal_tool"}]}}
+    ;
+
+    try client.parseToolsResponse(response);
+
+    try std.testing.expectEqual(@as(usize, 1), client.tools.items.len);
+    try std.testing.expectEqualStrings("minimal_tool", client.tools.items[0].name);
+    try std.testing.expectEqualStrings("", client.tools.items[0].description);
+}
+
+test "parseToolsResponse handles empty result" {
+    const allocator = std.testing.allocator;
+
+    const client = try allocator.create(McpClient);
+    defer allocator.destroy(client);
+
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = false,
+    };
+    defer {
+        allocator.free(client.name);
+        client.tools.deinit(allocator);
+    }
+
+    const response =
+        \\{"jsonrpc":"2.0","id":1,"result":{}}
+    ;
+
+    try client.parseToolsResponse(response);
+
+    try std.testing.expectEqual(@as(usize, 0), client.tools.items.len);
+}
+
+test "parseToolCallResponse extracts text content" {
+    const allocator = std.testing.allocator;
+
+    const client = try allocator.create(McpClient);
+    defer allocator.destroy(client);
+
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = true,
+    };
+    defer {
+        allocator.free(client.name);
+        for (client.tools.items) |tool| {
+            allocator.free(tool.name);
+            allocator.free(tool.description);
+            allocator.free(tool.input_schema);
+        }
+        client.tools.deinit(allocator);
+    }
+
+    const response =
+        \\{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"Hello from MCP"}]}}
+    ;
+
+    const result = try client.parseToolCallResponse(response);
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("Hello from MCP", result);
+}
+
+test "parseToolCallResponse handles error response" {
+    const allocator = std.testing.allocator;
+
+    const client = try allocator.create(McpClient);
+    defer allocator.destroy(client);
+
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = true,
+    };
+    defer {
+        allocator.free(client.name);
+        for (client.tools.items) |tool| {
+            allocator.free(tool.name);
+            allocator.free(tool.description);
+            allocator.free(tool.input_schema);
+        }
+        client.tools.deinit(allocator);
+    }
+
+    const response =
+        \\{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Invalid request"}}
+    ;
+
+    const result = try client.parseToolCallResponse(response);
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "MCP Error") != null);
+    try std.testing.expect(std.mem.indexOf(u8, result, "Invalid request") != null);
+}
+
+test "parseToolCallResponse handles empty content" {
+    const allocator = std.testing.allocator;
+
+    const client = try allocator.create(McpClient);
+    defer allocator.destroy(client);
+
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = true,
+    };
+    defer {
+        allocator.free(client.name);
+        for (client.tools.items) |tool| {
+            allocator.free(tool.name);
+            allocator.free(tool.description);
+            allocator.free(tool.input_schema);
+        }
+        client.tools.deinit(allocator);
+    }
+
+    const response =
+        \\{"jsonrpc":"2.0","id":1,"result":{"content":[]}}
+    ;
+
+    const result = try client.parseToolCallResponse(response);
+    defer allocator.free(result);
+
+    try std.testing.expectEqualStrings("MCP: Empty response", result);
+}
+
+test "parseToolCallResponse handles invalid JSON" {
+    const allocator = std.testing.allocator;
+
+    const client = try allocator.create(McpClient);
+    defer allocator.destroy(client);
+
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = true,
+    };
+    defer {
+        allocator.free(client.name);
+        for (client.tools.items) |tool| {
+            allocator.free(tool.name);
+            allocator.free(tool.description);
+            allocator.free(tool.input_schema);
+        }
+        client.tools.deinit(allocator);
+    }
+
+    const response = "invalid json{{{{";
+
+    const result = try client.parseToolCallResponse(response);
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "Failed to parse") != null);
+}
+
+test "loadMcpServers handles missing config" {
+    const allocator = std.testing.allocator;
+
+    var manager = try loadMcpServers(allocator, "/nonexistent/path/config.json");
+    defer manager.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), manager.toolCount());
+}
+
+test "loadMcpServers handles empty JSON object" {
+    const allocator = std.testing.allocator;
+
+    const config_path = "/tmp/test_empty_mcp.json";
+    const config_content = "{}";
+
+    try std.fs.cwd().writeFile(.{
+        .sub_path = config_path,
+        .data = config_content,
+    });
+    defer std.fs.cwd().deleteFile(config_path) catch {};
+
+    var manager = try loadMcpServers(allocator, config_path);
+    defer manager.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), manager.toolCount());
+}
+
+test "loadMcpServers handles invalid JSON" {
+    const allocator = std.testing.allocator;
+
+    const config_path = "/tmp/test_invalid_mcp.json";
+    const config_content = "not valid json";
+
+    try std.fs.cwd().writeFile(.{
+        .sub_path = config_path,
+        .data = config_content,
+    });
+    defer std.fs.cwd().deleteFile(config_path) catch {};
+
+    var manager = try loadMcpServers(allocator, config_path);
+    defer manager.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), manager.toolCount());
+}
+
+test "McpManager addServer and route registration" {
+    const allocator = std.testing.allocator;
+    var manager = McpManager.init(allocator);
+    defer manager.deinit();
+
+    const client = try allocator.create(McpClient);
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test_server"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = true,
+    };
+    defer {
+        allocator.free(client.name);
+        client.tools.deinit(allocator);
+        allocator.destroy(client);
+    }
+
+    try client.tools.append(allocator, .{
+        .name = try allocator.dupe(u8, "test_tool"),
+        .description = try allocator.dupe(u8, "A test tool"),
+        .input_schema = try allocator.dupe(u8, "{}"),
+    });
+
+    try manager.addServer(client);
+
+    try std.testing.expect(manager.isToolMcp("test_tool"));
+    try std.testing.expectEqualStrings("test_server", manager.tool_routes.get("test_tool").?);
+}
+
+test "McpClient nextId increments correctly" {
+    const allocator = std.testing.allocator;
+
+    const client = try allocator.create(McpClient);
+    defer allocator.destroy(client);
+
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = false,
+    };
+    defer allocator.free(client.name);
+
+    try std.testing.expectEqual(@as(u64, 1), client.nextId());
+    try std.testing.expectEqual(@as(u64, 2), client.nextId());
+    try std.testing.expectEqual(@as(u64, 3), client.nextId());
+    try std.testing.expectEqual(@as(u64, 4), client.next_id);
+}
+
+test "McpClient callTool requires initialization" {
+    const allocator = std.testing.allocator;
+
+    const client = try allocator.create(McpClient);
+    defer allocator.destroy(client);
+
+    client.* = .{
+        .allocator = allocator,
+        .name = try allocator.dupe(u8, "test"),
+        .child = undefined,
+        .next_id = 1,
+        .tools = .empty,
+        .is_initialized = false,
+    };
+    defer allocator.free(client.name);
+
+    const result = client.callTool("any_tool", "{}");
+    try std.testing.expectError(McpError.ProtocolError, result);
+}

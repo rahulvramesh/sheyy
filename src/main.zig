@@ -31,6 +31,203 @@ const ChatState = struct {
     }
 };
 
+// ── File Manager ──────────────────────────────────────────────────
+
+const FileMetadata = struct {
+    path: []const u8,
+    original_name: ?[]const u8,
+    mime_type: ?[]const u8,
+    size: i64,
+    timestamp: i64,
+    chat_id: i64,
+
+    fn deinit(self: FileMetadata, allocator: std.mem.Allocator) void {
+        allocator.free(self.path);
+        if (self.original_name) |n| allocator.free(n);
+        if (self.mime_type) |m| allocator.free(m);
+    }
+};
+
+const FileManager = struct {
+    allocator: std.mem.Allocator,
+    base_dir: []const u8,
+    max_files: usize,
+
+    const Self = @This();
+    const CleanupFile = struct { name: []const u8, mtime: i128 };
+
+    fn init(allocator: std.mem.Allocator, base_dir: []const u8) !Self {
+        // Ensure files directory exists
+        const files_dir = try std.fs.path.join(allocator, &.{ base_dir, "files" });
+        defer allocator.free(files_dir);
+        try std.fs.cwd().makePath(files_dir);
+
+        return Self{
+            .allocator = allocator,
+            .base_dir = try allocator.dupe(u8, base_dir),
+            .max_files = 100,
+        };
+    }
+
+    fn deinit(self: *Self) void {
+        self.allocator.free(self.base_dir);
+    }
+
+    fn getChatFilesDir(self: *Self, chat_id: i64) ![]const u8 {
+        return std.fmt.allocPrint(self.allocator, "{s}/files/{d}", .{ self.base_dir, chat_id });
+    }
+
+    fn generateUniqueFilename(self: *Self, _chat_id: i64, original_name: ?[]const u8) ![]const u8 {
+        _ = _chat_id;
+        const timestamp = std.time.timestamp();
+        const random = std.crypto.random.int(u32);
+
+        if (original_name) |name| {
+            const ext = std.fs.path.extension(name);
+            const basename = std.fs.path.stem(name);
+            return std.fmt.allocPrint(self.allocator, "{d}_{d}_{s}{s}", .{ timestamp, random, basename, ext });
+        } else {
+            return std.fmt.allocPrint(self.allocator, "{d}_{d}_file", .{ timestamp, random });
+        }
+    }
+
+    fn saveFile(self: *Self, chat_id: i64, data: []const u8, original_name: ?[]const u8, mime_type: ?[]const u8) !FileMetadata {
+        const chat_dir = try self.getChatFilesDir(chat_id);
+        defer self.allocator.free(chat_dir);
+        try std.fs.cwd().makePath(chat_dir);
+
+        const filename = try self.generateUniqueFilename(chat_id, original_name);
+        defer self.allocator.free(filename);
+
+        const filepath = try std.fs.path.join(self.allocator, &.{ chat_dir, filename });
+        errdefer self.allocator.free(filepath);
+
+        // Write file
+        const file = try std.fs.cwd().createFile(filepath, .{});
+        defer file.close();
+        try file.writeAll(data);
+
+        // Clean up old files
+        try self.cleanupOldFiles(chat_id);
+
+        return FileMetadata{
+            .path = filepath,
+            .original_name = if (original_name) |n| try self.allocator.dupe(u8, n) else null,
+            .mime_type = if (mime_type) |m| try self.allocator.dupe(u8, m) else null,
+            .size = @intCast(data.len),
+            .timestamp = std.time.timestamp(),
+            .chat_id = chat_id,
+        };
+    }
+
+    fn cleanupOldFiles(self: *Self, chat_id: i64) !void {
+        const chat_dir = try self.getChatFilesDir(chat_id);
+        defer self.allocator.free(chat_dir);
+
+        var dir = std.fs.cwd().openDir(chat_dir, .{ .iterate = true }) catch return;
+        defer dir.close();
+
+        var files: std.ArrayList(CleanupFile) = .empty;
+        defer {
+            for (files.items) |f| self.allocator.free(f.name);
+            files.deinit(self.allocator);
+        }
+
+        var it = dir.iterate();
+        while (try it.next()) |entry| {
+            if (entry.kind != .file) continue;
+            const stat = dir.statFile(entry.name) catch continue;
+            try files.append(self.allocator, .{
+                .name = try self.allocator.dupe(u8, entry.name),
+                .mtime = stat.mtime,
+            });
+        }
+
+        if (files.items.len <= self.max_files) return;
+
+        // Sort by modification time (oldest first)
+        const SortContext = struct {};
+        std.mem.sort(CleanupFile, files.items, SortContext{}, struct {
+            fn lessThan(_: SortContext, a: CleanupFile, b: CleanupFile) bool {
+                return a.mtime < b.mtime;
+            }
+        }.lessThan);
+
+        // Delete oldest files
+        const to_delete = files.items.len - self.max_files;
+        for (files.items[0..to_delete]) |file| {
+            const filepath = try std.fs.path.join(self.allocator, &.{ chat_dir, file.name });
+            defer self.allocator.free(filepath);
+            std.fs.cwd().deleteFile(filepath) catch {};
+        }
+    }
+
+    fn listRecentFiles(self: *Self, chat_id: i64, _limit: usize) ![]FileMetadata {
+        _ = _limit;
+        const chat_dir = try self.getChatFilesDir(chat_id);
+        defer self.allocator.free(chat_dir);
+
+        var dir = std.fs.cwd().openDir(chat_dir, .{ .iterate = true }) catch return &[_]FileMetadata{};
+        defer dir.close();
+
+        var files: std.ArrayList(FileMetadata) = .empty;
+        errdefer {
+            for (files.items) |f| f.deinit(self.allocator);
+            files.deinit(self.allocator);
+        }
+
+        var it = dir.iterate();
+        while (try it.next()) |entry| {
+            if (entry.kind != .file) continue;
+            const filepath = try std.fs.path.join(self.allocator, &.{ chat_dir, entry.name });
+            const stat = std.fs.cwd().statFile(filepath) catch continue;
+
+            try files.append(self.allocator, .{
+                .path = filepath,
+                .original_name = null,
+                .mime_type = null,
+                .size = @intCast(stat.size),
+                .timestamp = @intCast(@divFloor(stat.mtime, std.time.ns_per_s)),
+                .chat_id = chat_id,
+            });
+        }
+
+        // Sort by timestamp (newest first)
+        const MetadataSortContext = struct {};
+        std.mem.sort(FileMetadata, files.items, MetadataSortContext{}, struct {
+            fn lessThan(_: MetadataSortContext, a: FileMetadata, b: FileMetadata) bool {
+                return a.timestamp > b.timestamp;
+            }
+        }.lessThan);
+
+        const result = try files.toOwnedSlice(self.allocator);
+        return result;
+    }
+
+    fn getFileContext(self: *Self, chat_id: i64, allocator: std.mem.Allocator) ![]const u8 {
+        const files = try self.listRecentFiles(chat_id, 10);
+        defer {
+            for (files) |f| f.deinit(self.allocator);
+            self.allocator.free(files);
+        }
+
+        if (files.len == 0) return allocator.dupe(u8, "");
+
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(allocator);
+        const w = buf.writer(allocator);
+
+        try w.print("\n\nAvailable files in workspace:\n", .{});
+        for (files) |file| {
+            const basename = std.fs.path.basename(file.path);
+            try w.print("  - {s} ({d} bytes)\n", .{ basename, file.size });
+        }
+        try w.print("\nYou can reference these files in your responses or use bash to work with them.", .{});
+
+        return try allocator.dupe(u8, buf.items);
+    }
+};
+
 // ── Application State ─────────────────────────────────────────────
 
 const AppState = struct {
@@ -46,6 +243,7 @@ const AppState = struct {
     conversations: std.AutoHashMap(i64, conversation.Conversation),
     cortex: *memory_cortex.MemoryCortex,
     super_agent: *router.SuperAgent,
+    file_manager: FileManager,
     work_dir: []const u8, // base working directory
     persist_dir: []const u8, // memory persistence dir
     max_history: usize,
@@ -91,9 +289,123 @@ const AppState = struct {
     }
 };
 
+// ── File Handling ─────────────────────────────────────────────────
+
+fn handleFileMessage(state: *AppState, msg: telegram.Message) !?FileMetadata {
+    if (!msg.has_file) return null;
+
+    var file_info: ?telegram.FileInfo = null;
+    var original_name: ?[]const u8 = null;
+    var mime_type: ?[]const u8 = null;
+
+    // Handle photos - use largest photo
+    if (msg.photos) |photos| {
+        if (photos.len > 0) {
+            const photo = photos[0];
+            // Check file size limit
+            if (photo.file_size) |size| {
+                if (size > 20 * 1024 * 1024) {
+                    std.log.err("Photo file too large: {d} bytes", .{size});
+                    return null;
+                }
+            }
+            file_info = try state.tg.getFile(photo.file_id);
+            original_name = try std.fmt.allocPrint(state.allocator, "photo_{d}x{d}.jpg", .{ photo.width, photo.height });
+            mime_type = "image/jpeg";
+        }
+    }
+    // Handle documents
+    else if (msg.document) |doc| {
+        // Check file size limit
+        if (doc.file_size) |size| {
+            if (size > 50 * 1024 * 1024) {
+                std.log.err("Document file too large: {d} bytes", .{size});
+                return null;
+            }
+        }
+        file_info = try state.tg.getFile(doc.file_id);
+
+        // Extract filename from file_path if available
+        if (file_info.?.file_path) |path| {
+            original_name = try state.allocator.dupe(u8, std.fs.path.basename(path));
+        }
+    }
+
+    if (file_info == null or file_info.?.file_path == null) {
+        if (original_name) |n| state.allocator.free(n);
+        return null;
+    }
+
+    // Download the file
+    const file_data = try state.tg.downloadFile(file_info.?.file_path.?);
+    defer state.allocator.free(file_data);
+
+    // Save to workspace
+    const metadata = try state.file_manager.saveFile(msg.chat_id, file_data, original_name, mime_type);
+
+    // Cleanup
+    file_info.?.deinit(state.allocator);
+    if (original_name) |n| state.allocator.free(n);
+
+    return metadata;
+}
+
+fn buildMessageWithContext(state: *AppState, chat_id: i64, text: ?[]const u8, file_metadata: ?FileMetadata) ![]const u8 {
+    var parts: std.ArrayList([]const u8) = .empty;
+    defer parts.deinit(state.allocator);
+
+    // Add text content
+    if (text) |t| {
+        try parts.append(state.allocator, t);
+    }
+
+    // Add file information
+    if (file_metadata) |meta| {
+        if (text != null) try parts.append(state.allocator, "\n\n");
+
+        const file_info = try std.fmt.allocPrint(state.allocator, "[File received: {s} ({d} bytes)]\nSaved to: {s}", .{ meta.original_name orelse "unnamed", meta.size, meta.path });
+        try parts.append(state.allocator, file_info);
+    }
+
+    // Add available files context
+    const file_context = try state.file_manager.getFileContext(chat_id, state.allocator);
+    defer state.allocator.free(file_context);
+    if (file_context.len > 0) {
+        try parts.append(state.allocator, file_context);
+    }
+
+    // Join all parts
+    var total_len: usize = 0;
+    for (parts.items) |p| total_len += p.len;
+
+    var result = try state.allocator.alloc(u8, total_len);
+    var offset: usize = 0;
+    for (parts.items) |p| {
+        @memcpy(result[offset .. offset + p.len], p);
+        offset += p.len;
+    }
+
+    // Free allocated parts
+    for (parts.items) |p| {
+        // Don't free the original text pointer, only allocated strings
+        if (p.ptr != text.?.ptr and (file_metadata == null or p.ptr != file_metadata.?.path.ptr)) {
+            state.allocator.free(p);
+        }
+    }
+
+    return result;
+}
+
 // ── Message Processing ────────────────────────────────────────────
 
-fn processMessage(state: *AppState, chat_id: i64, text: []const u8) void {
+fn processMessage(state: *AppState, chat_id: i64, text: []const u8, file_metadata: ?FileMetadata) void {
+    // Build message with file context
+    const message_with_context = buildMessageWithContext(state, chat_id, text, file_metadata) catch |err| blk: {
+        std.log.err("Failed to build message context: {s}", .{@errorName(err)});
+        break :blk text;
+    };
+    defer if (message_with_context.ptr != text.ptr) state.allocator.free(message_with_context);
+
     const cs = state.chat_states.get(chat_id);
     const mode: ChatMode = if (cs) |s| s.mode else .super_agent;
 
@@ -108,7 +420,7 @@ fn processMessage(state: *AppState, chat_id: i64, text: []const u8) void {
                     cs_ptr.mode = .super_agent;
                     // Fall through to super_agent below
                 } else {
-                    state.orchestrator.handleMessage(session, text) catch |err| {
+                    state.orchestrator.handleMessage(session, message_with_context) catch |err| {
                         std.log.err("Orchestrator error: {s}", .{@errorName(err)});
                         state.tg.sendMessage(chat_id, "Error processing task.") catch {};
                     };
@@ -120,13 +432,13 @@ fn processMessage(state: *AppState, chat_id: i64, text: []const u8) void {
                 cs_ptr.mode = .super_agent;
             }
             // Fall through to super agent
-            processViaSuperAgent(state, chat_id, text);
+            processViaSuperAgent(state, chat_id, message_with_context);
         },
         .super_agent => {
-            processViaSuperAgent(state, chat_id, text);
+            processViaSuperAgent(state, chat_id, message_with_context);
         },
         .direct_agent => {
-            processViaDirectAgent(state, chat_id, text);
+            processViaDirectAgent(state, chat_id, message_with_context);
         },
     }
 }
@@ -252,6 +564,7 @@ fn handleCommand(state: *AppState, chat_id: i64, text: []const u8) void {
             \\AI Agent Bot (Auto-routing enabled)
             \\
             \\Just send a message - I'll automatically choose the right agent or team!
+            \\You can also send photos and documents.
             \\
             \\Manual Override:
             \\/agent <id> - Switch to a specific agent
@@ -263,6 +576,10 @@ fn handleCommand(state: *AppState, chat_id: i64, text: []const u8) void {
             \\/team <id> <task> - Start a team task manually
             \\/task - Show current task status
             \\/cancel - Cancel current task
+            \\
+            \\File Commands:
+            \\/files - List available files in workspace
+            \\/sendfile <path> - Send a file back to chat
             \\
             \\Memory:
             \\/memory add <text> - Store a memory
@@ -479,6 +796,118 @@ fn handleCommand(state: *AppState, chat_id: i64, text: []const u8) void {
     if (std.mem.eql(u8, cmd, "reload")) {
         agent_mod.reloadAgents(state.allocator, &state.agents);
         state.tg.sendMessage(chat_id, "Configs reloaded.") catch {};
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "files")) {
+        const files = state.file_manager.listRecentFiles(chat_id, 20) catch |err| {
+            std.log.err("Failed to list files: {s}", .{@errorName(err)});
+            state.tg.sendMessage(chat_id, "Error listing files.") catch {};
+            return;
+        };
+        defer {
+            for (files) |f| f.deinit(state.allocator);
+            state.allocator.free(files);
+        }
+
+        if (files.len == 0) {
+            state.tg.sendMessage(chat_id, "No files in workspace. Send me photos or documents!") catch {};
+            return;
+        }
+
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(state.allocator);
+        const w = buf.writer(state.allocator);
+
+        w.print("Files in workspace ({d} total):\n\n", .{files.len}) catch return;
+        for (files) |file| {
+            const basename = std.fs.path.basename(file.path);
+            const size_kb = @divFloor(file.size, 1024);
+            w.print("  - {s} ({d} KB)\n", .{ basename, size_kb }) catch continue;
+        }
+        w.print("\nUse /sendfile <filename> to send a file.", .{}) catch {};
+        state.tg.sendMessage(chat_id, buf.items) catch {};
+        return;
+    }
+
+    if (std.mem.eql(u8, cmd, "sendfile")) {
+        if (args.len == 0) {
+            state.tg.sendMessage(chat_id, "Usage: /sendfile <filename>\nUse /files to see available files.") catch {};
+            return;
+        }
+
+        // Try to find the file
+        var file_path: ?[]const u8 = null;
+        defer if (file_path) |p| state.allocator.free(p);
+
+        // First, check if it's a full path
+        if (std.fs.path.isAbsolute(args)) {
+            file_path = state.allocator.dupe(u8, args) catch |err| {
+                std.log.err("Error duplicating path: {s}", .{@errorName(err)});
+                state.tg.sendMessage(chat_id, "Error processing file path.") catch {};
+                return;
+            };
+        } else {
+            // Try to find in chat files directory
+            const chat_dir = state.file_manager.getChatFilesDir(chat_id) catch |err| {
+                std.log.err("Error getting chat dir: {s}", .{@errorName(err)});
+                state.tg.sendMessage(chat_id, "File not found.") catch {};
+                return;
+            };
+            defer state.allocator.free(chat_dir);
+            const full_path = std.fs.path.join(state.allocator, &.{ chat_dir, args }) catch |err| {
+                std.log.err("Error creating path: {s}", .{@errorName(err)});
+                state.tg.sendMessage(chat_id, "File not found.") catch {};
+                return;
+            };
+
+            // Check if file exists directly
+            const file_exists = blk: {
+                std.fs.cwd().access(full_path, .{}) catch break :blk false;
+                break :blk true;
+            };
+
+            if (file_exists) {
+                file_path = full_path;
+            } else {
+                state.allocator.free(full_path);
+                // Try without subdirectories
+                var dir = std.fs.cwd().openDir(chat_dir, .{ .iterate = true }) catch {
+                    state.tg.sendMessage(chat_id, "File not found.") catch {};
+                    return;
+                };
+                defer dir.close();
+
+                var found = false;
+                var it = dir.iterate();
+                while (it.next() catch |err| {
+                    std.log.err("Error iterating directory: {s}", .{@errorName(err)});
+                    return;
+                }) |entry| {
+                    if (entry.kind != .file) continue;
+                    if (std.mem.eql(u8, entry.name, args) or std.mem.endsWith(u8, entry.name, args)) {
+                        file_path = std.fs.path.join(state.allocator, &.{ chat_dir, entry.name }) catch |err| {
+                            std.log.err("Error creating path: {s}", .{@errorName(err)});
+                            return;
+                        };
+                        found = true;
+                        break;
+                    }
+                }
+
+                if (!found) {
+                    state.tg.sendMessage(chat_id, "File not found. Use /files to see available files.") catch {};
+                    return;
+                }
+            }
+        }
+
+        // Send the file
+        state.tg.sendDocument(chat_id, file_path.?, null) catch |err| {
+            std.log.err("Failed to send file: {s}", .{@errorName(err)});
+            state.tg.sendMessage(chat_id, "Failed to send file. Check that the file exists and is under 50MB.") catch {};
+            return;
+        };
         return;
     }
 
@@ -781,6 +1210,10 @@ pub fn main() !void {
     );
     defer super_agent.deinit();
 
+    // Initialize file manager
+    var file_manager = try FileManager.init(allocator, workspace_dir);
+    defer file_manager.deinit();
+
     // App state
     var state = AppState{
         .allocator = allocator,
@@ -795,6 +1228,7 @@ pub fn main() !void {
         .conversations = conversations,
         .cortex = &cortex,
         .super_agent = &super_agent,
+        .file_manager = file_manager,
         .work_dir = work_dir,
         .persist_dir = persist_dir,
         .max_history = 50,
@@ -832,17 +1266,32 @@ pub fn main() !void {
         }
 
         for (messages) |msg| {
-            std.log.info("Message from {d}: {s}", .{ msg.user_id, msg.text });
+            const text_content = msg.text orelse msg.caption orelse "";
+            std.log.info("Message from {d}: {s} (has_file={})", .{ msg.user_id, text_content, msg.has_file });
+
+            // Handle file downloads
+            var file_metadata: ?FileMetadata = null;
+            defer if (file_metadata) |meta| meta.deinit(state.allocator);
+
+            if (msg.has_file) {
+                file_metadata = handleFileMessage(&state, msg) catch |err| blk: {
+                    std.log.err("Failed to handle file: {s}", .{@errorName(err)});
+                    break :blk null;
+                };
+                if (file_metadata != null) {
+                    std.log.info("File saved: {s}", .{file_metadata.?.path});
+                }
+            }
 
             // Ensure chat state exists (defaults to super_agent mode)
             if (!state.chat_states.contains(msg.chat_id)) {
                 _ = state.getChatState(msg.chat_id) catch {};
             }
 
-            if (isCommand(msg.text)) {
-                handleCommand(&state, msg.chat_id, msg.text);
+            if (isCommand(text_content)) {
+                handleCommand(&state, msg.chat_id, text_content);
             } else {
-                processMessage(&state, msg.chat_id, msg.text);
+                processMessage(&state, msg.chat_id, text_content, file_metadata);
             }
         }
 

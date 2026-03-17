@@ -128,3 +128,349 @@ pub fn validateTeam(team: *const TeamDef, agents: *const std.StringHashMap(*agen
     }
     return true;
 }
+
+// ── Tests ─────────────────────────────────────────────────────────
+
+test "loadTeam parses valid JSON" {
+    const allocator = std.testing.allocator;
+
+    const test_dir = "/tmp/test_teams";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const team_json =
+        \\{"id": "dev_team",
+        \\ "name": "Development Team",
+        \\ "description": "A team of developers",
+        \\ "roles": [
+        \\   {"agent_id": "pm_agent", "role": "lead", "responsibilities": "Project management"},
+        \\   {"agent_id": "dev_agent", "role": "member", "responsibilities": "Coding"}
+        \\ ],
+        \\ "workflow": "Agile workflow"}
+    ;
+
+    const file_path = try std.fs.path.join(allocator, &.{ test_dir, "dev_team.json" });
+    defer allocator.free(file_path);
+
+    try std.fs.cwd().writeFile(.{
+        .sub_path = file_path,
+        .data = team_json,
+    });
+
+    const team = try loadTeam(allocator, file_path);
+    defer freeTeam(allocator, team);
+
+    try std.testing.expectEqualStrings("dev_team", team.id);
+    try std.testing.expectEqualStrings("Development Team", team.name);
+    try std.testing.expectEqualStrings("A team of developers", team.description);
+    try std.testing.expectEqualStrings("Agile workflow", team.workflow);
+    try std.testing.expectEqual(@as(usize, 2), team.roles.len);
+    try std.testing.expectEqualStrings("pm_agent", team.roles[0].agent_id);
+    try std.testing.expectEqualStrings("lead", team.roles[0].role);
+    try std.testing.expectEqualStrings("dev_agent", team.roles[1].agent_id);
+}
+
+test "loadTeam uses default workflow" {
+    const allocator = std.testing.allocator;
+
+    const test_dir = "/tmp/test_teams_default";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const team_json =
+        \\{"id": "minimal_team",
+        \\ "name": "Minimal Team",
+        \\ "description": "Minimal team",
+        \\ "roles": []}
+    ;
+
+    const file_path = try std.fs.path.join(allocator, &.{ test_dir, "minimal_team.json" });
+    defer allocator.free(file_path);
+
+    try std.fs.cwd().writeFile(.{
+        .sub_path = file_path,
+        .data = team_json,
+    });
+
+    const team = try loadTeam(allocator, file_path);
+    defer freeTeam(allocator, team);
+
+    try std.testing.expectEqualStrings("minimal_team", team.id);
+    try std.testing.expect(std.mem.indexOf(u8, team.workflow, "Sequential") != null);
+}
+
+test "loadAllTeams loads multiple teams" {
+    const allocator = std.testing.allocator;
+
+    const test_dir = "/tmp/test_all_teams";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const team1_json =
+        \\{"id": "team1", "name": "Team One", "description": "First team", "roles": []}
+    ;
+    const team2_json =
+        \\{"id": "team2", "name": "Team Two", "description": "Second team", "roles": []}
+    ;
+
+    const path1 = try std.fs.path.join(allocator, &.{ test_dir, "team1.json" });
+    defer allocator.free(path1);
+    const path2 = try std.fs.path.join(allocator, &.{ test_dir, "team2.json" });
+    defer allocator.free(path2);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = path1, .data = team1_json });
+    try std.fs.cwd().writeFile(.{ .sub_path = path2, .data = team2_json });
+
+    var teams = try loadAllTeams(allocator, test_dir);
+    defer {
+        var it = teams.iterator();
+        while (it.next()) |entry| {
+            freeTeam(allocator, entry.value_ptr.*);
+        }
+        teams.deinit();
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), teams.count());
+    try std.testing.expect(teams.get("team1") != null);
+    try std.testing.expect(teams.get("team2") != null);
+}
+
+test "loadAllTeams handles non-existent directory" {
+    const allocator = std.testing.allocator;
+
+    var teams = try loadAllTeams(allocator, "/nonexistent/directory");
+    defer teams.deinit();
+
+    try std.testing.expectEqual(@as(usize, 0), teams.count());
+}
+
+test "loadAllTeams skips invalid JSON files" {
+    const allocator = std.testing.allocator;
+
+    const test_dir = "/tmp/test_teams_invalid";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const valid_json =
+        \\{"id": "valid", "name": "Valid Team", "description": "A valid team", "roles": []}
+    ;
+    const invalid_json = "not valid json";
+
+    const valid_path = try std.fs.path.join(allocator, &.{ test_dir, "valid.json" });
+    defer allocator.free(valid_path);
+    const invalid_path = try std.fs.path.join(allocator, &.{ test_dir, "invalid.json" });
+    defer allocator.free(invalid_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = valid_path, .data = valid_json });
+    try std.fs.cwd().writeFile(.{ .sub_path = invalid_path, .data = invalid_json });
+
+    var teams = try loadAllTeams(allocator, test_dir);
+    defer {
+        var it = teams.iterator();
+        while (it.next()) |entry| {
+            freeTeam(allocator, entry.value_ptr.*);
+        }
+        teams.deinit();
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), teams.count());
+    try std.testing.expect(teams.get("valid") != null);
+}
+
+test "loadAllTeams skips non-JSON files" {
+    const allocator = std.testing.allocator;
+
+    const test_dir = "/tmp/test_teams_skip";
+    std.fs.cwd().makeDir(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const team_json =
+        \\{"id": "team", "name": "Team", "description": "A team", "roles": []}
+    ;
+
+    const json_path = try std.fs.path.join(allocator, &.{ test_dir, "team.json" });
+    defer allocator.free(json_path);
+    const txt_path = try std.fs.path.join(allocator, &.{ test_dir, "readme.txt" });
+    defer allocator.free(txt_path);
+
+    try std.fs.cwd().writeFile(.{ .sub_path = json_path, .data = team_json });
+    try std.fs.cwd().writeFile(.{ .sub_path = txt_path, .data = "This is not a team" });
+
+    var teams = try loadAllTeams(allocator, test_dir);
+    defer {
+        var it = teams.iterator();
+        while (it.next()) |entry| {
+            freeTeam(allocator, entry.value_ptr.*);
+        }
+        teams.deinit();
+    }
+
+    try std.testing.expectEqual(@as(usize, 1), teams.count());
+}
+
+test "validateTeam returns true for valid team" {
+    const allocator = std.testing.allocator;
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    const agent_def = try allocator.create(agent_mod.AgentDef);
+    defer {
+        allocator.free(agent_def.id);
+        allocator.free(agent_def.name);
+        allocator.free(agent_def.description);
+        allocator.free(agent_def.config.model_id);
+        allocator.free(agent_def.config.system_prompt);
+        if (agent_def.tools) |t| allocator.free(t);
+        if (agent_def.skills) |s| allocator.free(s);
+        allocator.destroy(agent_def);
+    }
+
+    agent_def.* = .{
+        .id = try allocator.dupe(u8, "pm_agent"),
+        .name = try allocator.dupe(u8, "PM Agent"),
+        .description = try allocator.dupe(u8, "Project Manager"),
+        .config = .{
+            .model_id = try allocator.dupe(u8, "gpt-4o"),
+            .system_prompt = try allocator.dupe(u8, "You are a PM"),
+            .temperature = 0.5,
+        },
+        .tools = null,
+        .skills = null,
+        .source_path = null,
+        .last_modified = null,
+    };
+
+    try agents.put(agent_def.id, agent_def);
+
+    const team = try allocator.create(TeamDef);
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        for (team.roles) |r| {
+            allocator.free(r.agent_id);
+            allocator.free(r.role);
+            allocator.free(r.responsibilities);
+        }
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+        if (team.source_path) |p| allocator.free(p);
+        allocator.destroy(team);
+    }
+
+    const roles = try allocator.alloc(TeamRole, 1);
+    roles[0] = .{
+        .agent_id = try allocator.dupe(u8, "pm_agent"),
+        .role = try allocator.dupe(u8, "lead"),
+        .responsibilities = try allocator.dupe(u8, "Manage the project"),
+    };
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "test_team"),
+        .name = try allocator.dupe(u8, "Test Team"),
+        .description = try allocator.dupe(u8, "A test team"),
+        .roles = roles,
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+
+    try std.testing.expect(validateTeam(team, &agents));
+}
+
+test "validateTeam returns false for missing agent" {
+    const allocator = std.testing.allocator;
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    const team = try allocator.create(TeamDef);
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        for (team.roles) |r| {
+            allocator.free(r.agent_id);
+            allocator.free(r.role);
+            allocator.free(r.responsibilities);
+        }
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+        if (team.source_path) |p| allocator.free(p);
+        allocator.destroy(team);
+    }
+
+    const roles = try allocator.alloc(TeamRole, 1);
+    roles[0] = .{
+        .agent_id = try allocator.dupe(u8, "missing_agent"),
+        .role = try allocator.dupe(u8, "lead"),
+        .responsibilities = try allocator.dupe(u8, "Manage the project"),
+    };
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "test_team"),
+        .name = try allocator.dupe(u8, "Test Team"),
+        .description = try allocator.dupe(u8, "A test team"),
+        .roles = roles,
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+
+    try std.testing.expect(!validateTeam(team, &agents));
+}
+
+test "validateTeam handles empty team" {
+    const allocator = std.testing.allocator;
+
+    var agents = std.StringHashMap(*agent_mod.AgentDef).init(allocator);
+    defer agents.deinit();
+
+    const team = try allocator.create(TeamDef);
+    defer {
+        allocator.free(team.id);
+        allocator.free(team.name);
+        allocator.free(team.description);
+        allocator.free(team.roles);
+        allocator.free(team.workflow);
+        if (team.source_path) |p| allocator.free(p);
+        allocator.destroy(team);
+    }
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "empty_team"),
+        .name = try allocator.dupe(u8, "Empty Team"),
+        .description = try allocator.dupe(u8, "An empty team"),
+        .roles = try allocator.alloc(TeamRole, 0),
+        .workflow = try allocator.dupe(u8, "Test workflow"),
+        .source_path = null,
+        .last_modified = null,
+    };
+
+    try std.testing.expect(validateTeam(team, &agents));
+}
+
+test "freeTeam releases all memory" {
+    const allocator = std.testing.allocator;
+
+    const team = try allocator.create(TeamDef);
+    const roles = try allocator.alloc(TeamRole, 1);
+    roles[0] = .{
+        .agent_id = try allocator.dupe(u8, "agent1"),
+        .role = try allocator.dupe(u8, "lead"),
+        .responsibilities = try allocator.dupe(u8, "Responsibilities"),
+    };
+
+    team.* = .{
+        .id = try allocator.dupe(u8, "team1"),
+        .name = try allocator.dupe(u8, "Team One"),
+        .description = try allocator.dupe(u8, "Description"),
+        .roles = roles,
+        .workflow = try allocator.dupe(u8, "Workflow"),
+        .source_path = try allocator.dupe(u8, "/path/to/team.json"),
+        .last_modified = 1234567890,
+    };
+
+    freeTeam(allocator, team);
+}

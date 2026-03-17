@@ -73,6 +73,93 @@ The bot will:
 3. For each incoming message, send it to the configured LLM
 4. Return the LLM's response to the user
 
+## Deployment as System Service
+
+For production deployments, you can run SheyyBot as a systemd service:
+
+### Quick Setup
+
+```bash
+# Run the setup script (requires root)
+sudo ./scripts/setup-service.sh
+
+# Deploy your configuration and start the service
+sudo ./scripts/deploy.sh
+```
+
+### Manual Setup
+
+1. **Build the project:**
+   ```bash
+   zig build -Doptimize=ReleaseFast
+   ```
+
+2. **Create system user:**
+   ```bash
+   sudo useradd --system --no-create-home --shell /bin/false sheyybot
+   ```
+
+3. **Install binary:**
+   ```bash
+   sudo cp zig-out/bin/my_zig_agent /usr/local/bin/sheyybot
+   sudo chmod 755 /usr/local/bin/sheyybot
+   ```
+
+4. **Create working directory:**
+   ```bash
+   sudo mkdir -p /var/lib/sheyybot
+   sudo mkdir -p /var/lib/sheyybot/{agents,teams,skills,memory,workspaces}
+   sudo chown -R sheyybot:sheyybot /var/lib/sheyybot
+   ```
+
+5. **Copy configuration:**
+   ```bash
+   sudo cp auth.json models.json allowed_users.json /var/lib/sheyybot/
+   sudo cp -r agents teams skills /var/lib/sheyybot/
+   sudo chown -R sheyybot:sheyybot /var/lib/sheyybot
+   ```
+
+6. **Install systemd service:**
+   ```bash
+   sudo cp systemd/sheyybot.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable sheyybot
+   sudo systemctl start sheyybot
+   ```
+
+### Service Management
+
+```bash
+# Check status
+sudo systemctl status sheyybot
+
+# View logs
+sudo journalctl -u sheyybot -f
+
+# Restart service
+sudo systemctl restart sheyybot
+
+# Stop service
+sudo systemctl stop sheyybot
+
+# Update configuration and restart
+sudo ./scripts/deploy.sh
+```
+
+### File Locations
+
+| Component | Location |
+|-----------|----------|
+| Binary | `/usr/local/bin/sheyybot` |
+| Working directory | `/var/lib/sheyybot` |
+| Config files | `/var/lib/sheyybot/*.json` |
+| Agents | `/var/lib/sheyybot/agents/` |
+| Teams | `/var/lib/sheyybot/teams/` |
+| Skills | `/var/lib/sheyybot/skills/` |
+| Memory | `/var/lib/sheyybot/memory/` |
+| Workspaces | `/var/lib/sheyybot/workspaces/` |
+| Logs | `journalctl -u sheyybot` |
+
 ## Memory Management
 
 This application uses Zig's explicit memory management with:

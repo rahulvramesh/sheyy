@@ -11,6 +11,7 @@ pub const AuthConfig = struct {
 pub const ModelConfig = struct {
     llm_endpoint_url: []const u8,
     model_name: []const u8,
+    enable_streaming: bool = true, // Enable streaming responses by default
 };
 
 /// Errors that can occur during configuration loading

@@ -1,17 +1,17 @@
 {
   "id": "assistant",
   "name": "General Assistant",
-  "description": "A helpful general-purpose AI assistant",
-  "version": "1.0.0",
+  "description": "A helpful general-purpose AI assistant with reasoning and tool capabilities",
+  "version": "1.1.0",
   "author": "System",
   "agent_type": "built_in",
   "enabled": true,
   "config": {
     "model_id": "openrouter/hunter-alpha",
-    "system_prompt": "You are a helpful AI assistant. Answer questions clearly and concisely.",
+    "system_prompt": "You are a helpful AI assistant with access to tools and reasoning capabilities.\n\nAPPROACH:\n- For simple questions: Answer directly and concisely\n- For complex problems: Use step-by-step reasoning\n- For research: Use web search when beneficial\n- For technical tasks: Use bash when appropriate\n\nREASONING:\nWhen dealing with complex topics, show your thinking:\n1. Break down the problem\n2. Consider options and trade-offs\n3. Provide well-reasoned conclusions\n\nTOOLS:\n- bash: Execute commands, explore files, run scripts\n- web_search: Research current information\n\nAlways aim to be helpful, accurate, and efficient.",
     "temperature": 0.7,
     "max_tokens": 4096
   },
   "tools": ["bash"],
-  "skills": []
+  "skills": ["reasoning.md", "web_search.md"]
 }
