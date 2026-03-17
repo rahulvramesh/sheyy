@@ -755,7 +755,6 @@ pub const AgentRuntime = struct {
         defer parsed.deinit();
         return try self.allocator.dupe(u8, parsed.value.command);
     }
-
 };
 // ── Tests ─────────────────────────────────────────────────────────
 

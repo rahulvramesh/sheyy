@@ -560,7 +560,8 @@ pub const SuperAgent = struct {
         try self.agents.put(agent_def.id, agent_def);
 
         std.log.info("[router] Created new agent: {s} ({s})", .{ name, id });
-        return try std.fmt.allocPrint(self.allocator,
+        return try std.fmt.allocPrint(
+            self.allocator,
             "Created agent '{s}' ({s}). It's now available for delegation. Tools: {d}, Skills: {d}.",
             .{ name, id, agent_def.tool_names.len, agent_def.skill_names.len },
         );
@@ -624,7 +625,8 @@ pub const SuperAgent = struct {
         try self.teams.put(team_def.id, team_def);
 
         std.log.info("[router] Created new team: {s} ({s}) with {d} roles", .{ name_val, id, team_def.roles.len });
-        return try std.fmt.allocPrint(self.allocator,
+        return try std.fmt.allocPrint(
+            self.allocator,
             "Created team '{s}' ({s}) with {d} roles. You can now start a team task with it.",
             .{ name_val, id, team_def.roles.len },
         );

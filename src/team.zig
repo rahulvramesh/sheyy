@@ -133,7 +133,7 @@ pub fn reloadTeams(allocator: std.mem.Allocator, teams: *std.StringHashMap(*Team
             std.log.info("Reloading team: {s}", .{tm.id});
 
             const new_team = loadTeam(allocator, path) catch |err| {
-                std.log.err("Reload failed for team {s}: {s}", .{tm.id, @errorName(err)});
+                std.log.err("Reload failed for team {s}: {s}", .{ tm.id, @errorName(err) });
                 continue;
             };
 
@@ -165,7 +165,7 @@ pub fn reloadTeams(allocator: std.mem.Allocator, teams: *std.StringHashMap(*Team
             freeTeam(allocator, team_def);
             continue;
         };
-        std.log.info("Discovered new team: {s} ({s})", .{team_def.name, team_def.id});
+        std.log.info("Discovered new team: {s} ({s})", .{ team_def.name, team_def.id });
     }
 }
 
