@@ -1272,7 +1272,8 @@ pub fn main() !void {
 
     std.log.info("Bot ready with {d} agents, {d} teams. Auto-routing enabled.", .{ agents.count(), teams.count() });
 
-    // Main polling loop
+    // Main polling loop with exponential backoff on errors
+    var consecutive_poll_errors: u32 = 0;
     while (true) {
         // Hot reload check every 5 seconds
         const now = std.time.timestamp();
@@ -1282,10 +1283,25 @@ pub fn main() !void {
         }
 
         const messages = tg_client.pollUpdates(30) catch |err| {
-            std.log.err("Poll error: {s}", .{@errorName(err)});
-            std.Thread.sleep(5 * std.time.ns_per_s);
+            consecutive_poll_errors += 1;
+
+            // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
+            const base_delay: u64 = 1;
+            const max_delay: u64 = 30;
+            const shift: u6 = @intCast(@min(consecutive_poll_errors, 5));
+            const delay = @min(base_delay << shift, max_delay);
+
+            if (consecutive_poll_errors >= 10) {
+                // Marker the doctor script watches for
+                std.log.err("HEALTH_CRITICAL: {d} consecutive poll failures, last: {s}", .{ consecutive_poll_errors, @errorName(err) });
+            } else {
+                std.log.err("Poll error ({d}): {s}, retry in {d}s", .{ consecutive_poll_errors, @errorName(err), delay });
+            }
+
+            std.Thread.sleep(@as(u64, delay) * std.time.ns_per_s);
             continue;
         };
+        consecutive_poll_errors = 0; // Reset on success
         defer {
             for (messages) |msg| msg.deinit(allocator);
             allocator.free(messages);

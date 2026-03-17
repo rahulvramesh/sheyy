@@ -1,0 +1,7 @@
+[Unit]
+Description=SheyyBot Doctor - Health Check
+After=sheyybot.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/sheyybot/doctor.sh
