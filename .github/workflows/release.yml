@@ -6,7 +6,7 @@ on:
       - 'v*'
 
 env:
-  ZIG_VERSION: 0.15.2
+  ZIG_VERSION: "0.15.2"
 
 jobs:
   release:
@@ -18,36 +18,27 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: ${{ env.ZIG_VERSION }}
-
-      - name: Cache Zig dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/zig
-            .zig-cache
-          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig.zon') }}
-          restore-keys: |
-            ${{ runner.os }}-zig-
+      - name: Install Zig
+        run: |
+          wget -q "https://ziglang.org/builds/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          tar -xf "zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          echo "$PWD/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       - name: Build release binary
         run: zig build -Doptimize=ReleaseFast
 
       - name: Create tarball
         run: |
-          tar -czf my_zig_agent-${{ github.ref_name }}-linux-x86_64.tar.gz -C zig-out/bin my_zig_agent
+          tar -czf sheyybot-${{ github.ref_name }}-linux-x86_64.tar.gz -C zig-out/bin my_zig_agent
 
       - name: Generate checksum
         run: |
-          sha256sum my_zig_agent-${{ github.ref_name }}-linux-x86_64.tar.gz > my_zig_agent-${{ github.ref_name }}-linux-x86_64.tar.gz.sha256
+          sha256sum sheyybot-${{ github.ref_name }}-linux-x86_64.tar.gz > sheyybot-${{ github.ref_name }}-linux-x86_64.tar.gz.sha256
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            my_zig_agent-${{ github.ref_name }}-linux-x86_64.tar.gz
-            my_zig_agent-${{ github.ref_name }}-linux-x86_64.tar.gz.sha256
+            sheyybot-${{ github.ref_name }}-linux-x86_64.tar.gz
+            sheyybot-${{ github.ref_name }}-linux-x86_64.tar.gz.sha256
           generate_release_notes: true

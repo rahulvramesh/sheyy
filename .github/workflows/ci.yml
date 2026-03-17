@@ -1,7 +1,5 @@
 # Build status badge:
-# ![CI](https://github.com/<OWNER>/<REPO>/actions/workflows/ci.yml/badge.svg)
-# Replace <OWNER>/<REPO> with your GitHub repository path, e.g.:
-# ![CI](https://github.com/sheyy/my_zig_agent/actions/workflows/ci.yml/badge.svg)
+# ![CI](https://github.com/rahulvramesh/sheyy/actions/workflows/ci.yml/badge.svg)
 
 name: CI
 
@@ -12,7 +10,7 @@ on:
     branches: [main]
 
 env:
-  ZIG_VERSION: 0.15.2
+  ZIG_VERSION: "0.15.2"
 
 jobs:
   build-and-test:
@@ -22,20 +20,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Zig
-        uses: mlugg/setup-zig@v1
-        with:
-          version: ${{ env.ZIG_VERSION }}
+      - name: Install Zig
+        run: |
+          wget -q "https://ziglang.org/builds/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          tar -xf "zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+          echo "$PWD/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
-      - name: Cache Zig dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/zig
-            .zig-cache
-          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig.zon') }}
-          restore-keys: |
-            ${{ runner.os }}-zig-
+      - name: Verify Zig
+        run: zig version
 
       - name: Check formatting
         run: zig fmt --check src/
@@ -55,6 +47,6 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: my_zig_agent-${{ steps.meta.outputs.date }}-${{ steps.meta.outputs.short_sha }}
+          name: sheyybot-${{ steps.meta.outputs.date }}-${{ steps.meta.outputs.short_sha }}
           path: zig-out/bin/my_zig_agent
           retention-days: 7
