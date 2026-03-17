@@ -20,9 +20,9 @@ jobs:
 
       - name: Install Zig
         run: |
-          wget -q "https://ziglang.org/builds/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
-          tar -xf "zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
-          echo "$PWD/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          wget -q "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          tar -xf "zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       - name: Build release binary
         run: zig build -Doptimize=ReleaseFast
