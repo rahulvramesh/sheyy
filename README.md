@@ -277,13 +277,47 @@ Relevant memories are automatically injected into context based on TF-IDF simila
 ### Systemd Service (Production)
 
 ```bash
-# One-command setup
-sudo ./scripts/setup-service.sh
-sudo ./scripts/deploy.sh
+# One-command setup (installs both bot and doctor)
+sudo ./install.sh
 
 # Check status
 sudo systemctl status sheyybot
 sudo journalctl -u sheyybot -f
+```
+
+### Health Monitoring (Doctor)
+
+SheyyBot includes an automatic health check system ("Doctor") that monitors the bot and auto-recovers from failures:
+
+- **Process Monitoring** - Detects if the bot crashes or stops responding
+- **Memory Limits** - Restarts if memory exceeds 200MB
+- **Error Loop Detection** - Detects consecutive poll failures and restarts
+- **Telegram API Health** - Monitors API connectivity (informational)
+
+```bash
+# Doctor runs automatically every 2 minutes
+sudo systemctl status sheyybot-doctor.timer
+sudo systemctl list-timers sheyybot-doctor.timer
+
+# View doctor logs
+cat /var/log/sheyybot-doctor.log
+sudo journalctl -u sheyybot-doctor -f
+
+# Manually trigger a health check
+sudo systemctl start sheyybot-doctor.service
+```
+
+The doctor is installed automatically by `install.sh` but can also be set up manually:
+
+```bash
+# Manual doctor setup
+sudo mkdir -p /usr/local/lib/sheyybot
+sudo cp scripts/doctor.sh /usr/local/lib/sheyybot/
+sudo chmod +x /usr/local/lib/sheyybot/doctor.sh
+sudo cp systemd/sheyybot-doctor.service /etc/systemd/system/
+sudo cp systemd/sheyybot-doctor.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sheyybot-doctor.timer
 ```
 
 ### Docker (Optional)
@@ -325,6 +359,8 @@ zig test src/agent.zig
 
 ### Service Won't Start
 
+The Doctor will automatically restart the service if it fails, but for manual debugging:
+
 ```bash
 # Check logs
 sudo journalctl -u sheyybot -n 50
@@ -336,6 +372,10 @@ sudo cat /var/lib/sheyybot/models.json
 # Check permissions
 sudo ls -la /var/lib/sheyybot/
 sudo ls -la /usr/local/bin/sheyybot
+
+# Check doctor logs to see if it has been restarting
+sudo cat /var/log/sheyybot-doctor.log
+sudo journalctl -u sheyybot-doctor -n 20
 ```
 
 ### API Errors
@@ -411,6 +451,7 @@ sudo journalctl -u sheyybot | grep -i memory
 - [x] Semantic memory with TF-IDF
 - [x] File support
 - [x] Systemd service
+- [x] Health monitoring with auto-recovery (Doctor)
 - [ ] Voice message support
 - [ ] Vision model integration
 - [ ] Plugin system
