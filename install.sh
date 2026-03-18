@@ -407,7 +407,38 @@ chmod 750 "${WORK_DIR}"
 if [[ -f "${WORK_DIR}/auth.json" ]]; then
     chmod 640 "${WORK_DIR}/auth.json"
 fi
+
+# Ensure doctor log directory exists
+mkdir -p /var/log
+chmod 755 /usr/local/lib/sheyybot
 success "Ownership set to ${SERVICE_USER}:${SERVICE_GROUP}"
+
+# ---------------------------------------------------------------------------
+# Install Doctor (health check)
+# ---------------------------------------------------------------------------
+step "Installing SheyyBot Doctor"
+
+DOCTOR_SCRIPT="/usr/local/lib/sheyybot/doctor.sh"
+mkdir -p "/usr/local/lib/sheyybot"
+
+if [[ -f "${SCRIPT_DIR}/scripts/doctor.sh" ]]; then
+    cp -f "${SCRIPT_DIR}/scripts/doctor.sh" "${DOCTOR_SCRIPT}"
+    chmod +x "${DOCTOR_SCRIPT}"
+    success "Doctor script installed to ${DOCTOR_SCRIPT}"
+else
+    warn "scripts/doctor.sh not found, skipping doctor installation"
+fi
+
+# Install systemd doctor service and timer
+if [[ -f "${SCRIPT_DIR}/systemd/sheyybot-doctor.service" ]]; then
+    cp -f "${SCRIPT_DIR}/systemd/sheyybot-doctor.service" "/etc/systemd/system/"
+    cp -f "${SCRIPT_DIR}/systemd/sheyybot-doctor.timer" "/etc/systemd/system/"
+    systemctl daemon-reload
+    systemctl enable sheyybot-doctor.timer 2>/dev/null
+    success "Doctor service and timer installed"
+else
+    warn "systemd/sheyybot-doctor.service not found, skipping doctor service"
+fi
 
 # ---------------------------------------------------------------------------
 # Enable and start service
@@ -423,6 +454,9 @@ if [[ "${CONFIG_NEEDED}" == "true" ]]; then
 else
     if systemctl start sheyybot.service; then
         success "Service started"
+        if systemctl start sheyybot-doctor.timer 2>/dev/null; then
+            success "Doctor timer started"
+        fi
     else
         warn "Service failed to start. Check logs: journalctl -u sheyybot -n 50"
     fi
@@ -464,6 +498,8 @@ echo -e "    ${CYAN}sudo systemctl status sheyybot${NC}      # Check status"
 echo -e "    ${CYAN}sudo journalctl -u sheyybot -f${NC}      # Follow logs"
 echo -e "    ${CYAN}sudo systemctl restart sheyybot${NC}     # Restart"
 echo -e "    ${CYAN}sudo systemctl stop sheyybot${NC}        # Stop"
+echo -e "    ${CYAN}sudo systemctl status sheyybot-doctor.timer${NC}  # Doctor status"
+echo -e "    ${CYAN}cat /var/log/sheyybot-doctor.log${NC}    # Doctor logs"
 echo ""
 echo -e "  To update SheyyBot, pull the latest code and re-run:"
 echo -e "    ${CYAN}sudo ./install.sh${NC}"
